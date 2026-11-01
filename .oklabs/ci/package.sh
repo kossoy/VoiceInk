@@ -2,13 +2,13 @@
 # Notarize + staple the app, build the release zip and DMG (DMG signed, notarized,
 # stapled), check both the way a downloaded copy is checked, write SHA256SUMS.
 # Inputs (env): APP, KC, NOTARY_PROFILE, SIGN_IDENTITY, OUT_DIR
-# Output: $OUT_DIR/dist/{VoiceInk-oklabs.zip,VoiceInk-oklabs.dmg,SHA256SUMS}
+# Output: $OUT_DIR/dist/{VoiceInk-oklabs.zip,VoiceInk-oklabs.dmg,SHA256SUMS}; keeps other dist files
 set -euo pipefail
 : "${APP:?}" "${KC:?}" "${NOTARY_PROFILE:?}" "${SIGN_IDENTITY:?}" "${OUT_DIR:?}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIST="$OUT_DIR/dist"
 WORK="$OUT_DIR/package"
-rm -rf "$DIST" "$WORK"; mkdir -p "$DIST" "$WORK"
+rm -rf "$WORK" "$DIST/VoiceInk-oklabs.zip" "$DIST/VoiceInk-oklabs.dmg" "$DIST/SHA256SUMS"; mkdir -p "$DIST" "$WORK"
 
 echo "==> notarize app"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$WORK/notarization-app.zip"
@@ -57,4 +57,9 @@ spctl -a -t exec -vv "$MNT/VoiceInk.app"
 [[ -L "$MNT/Applications" ]]
 hdiutil detach "$MNT" >/dev/null; trap - EXIT
 
-(cd "$DIST" && shasum -a 256 VoiceInk-oklabs.zip VoiceInk-oklabs.dmg > SHA256SUMS && cat SHA256SUMS)
+# Everything in dist (the harness zip too, when bench.sh ran first).
+cd "$DIST"
+SUMMED=(VoiceInk-oklabs.zip VoiceInk-oklabs.dmg)
+for extra in scribe-bench-*.zip; do [[ -e "$extra" ]] && SUMMED+=("$extra"); done
+shasum -a 256 "${SUMMED[@]}" > SHA256SUMS
+cat SHA256SUMS

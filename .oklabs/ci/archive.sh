@@ -78,28 +78,59 @@ nested_items() {
         done
     # Loose Mach-O files: dylibs and helper tools such as Sparkle's Autoupdate.
     find "$APP/Contents" -type f \( -name '*.dylib' -o -perm +111 \) -not -path '*/_CodeSignature/*' -not -path "$APP/Contents/MacOS/*" 2>/dev/null \
-        | while read -r f; do file -b "$f" | grep -q 'Mach-O' && echo "$f"; done
+        | while read -r f; do if file -b "$f" | grep -q 'Mach-O'; then echo "$f"; fi; done
+    return 0
 }
 by_depth_desc() { awk '{ n = gsub("/", "/"); print n "\t" $0 }' | sort -t$'\t' -k1,1nr | cut -f2-; }
+# Team and secure timestamp everywhere; hardened runtime only where it means
+# something (executables and bundles). A dylib's runtime flag is irrelevant to
+# notarization, so Xcode's own dylib signatures are left as exported.
 check_item() {
     local info
     info="$(codesign -dv --verbose=4 "$1" 2>&1 || true)"
     grep -q "^TeamIdentifier=$TEAM_ID\$" <<<"$info" || return 1
     grep -q '^Timestamp=' <<<"$info" || return 1
+    [[ "$1" == *.dylib ]] && return 0
     grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]+\(.*runtime' <<<"$info" || return 1
 }
-BAD=0
+BAD_ITEMS=()
 while read -r item; do
     [[ -n "$item" ]] || continue
-    if check_item "$item"; then echo "ok   ${item#"$APP"/}"; else echo "BAD  ${item#"$APP"/}"; BAD=1; fi
+    if check_item "$item"; then
+        echo "ok   ${item#"$APP"/}"
+    else
+        echo "BAD  ${item#"$APP"/}"
+        codesign -dv --verbose=4 "$item" 2>&1 | grep -E '^(Identifier|TeamIdentifier|Timestamp|CodeDirectory|Authority)=?' | sed 's/^/       /' || true
+        BAD_ITEMS+=("$item")
+    fi
 done < <(nested_items | sort -u)
 
-if [[ "${FORCE_RESIGN:-0}" == 1 || "$BAD" == 1 ]]; then
-    echo "==> re-signing nested code inside-out"
-    nested_items | sort -u | by_depth_desc | while read -r item; do
-        codesign --force --options runtime --timestamp --keychain "$KC" \
-            --preserve-metadata=identifier,entitlements,flags --sign "$SIGN_IDENTITY" "$item"
-    done
+resign() {
+    codesign --force --options runtime --timestamp --keychain "$KC" \
+        --preserve-metadata=identifier,entitlements,flags --sign "$SIGN_IDENTITY" "$1"
+}
+if [[ "${FORCE_RESIGN:-0}" == 1 ]]; then
+    echo "==> re-signing all nested code inside-out (export failed)"
+    nested_items | sort -u | by_depth_desc | while read -r item; do resign "$item"; done
+    codesign --force --options runtime --timestamp --keychain "$KC" \
+        --entitlements "$ROOT/VoiceInk/VoiceInk.local.entitlements" --sign "$SIGN_IDENTITY" "$APP"
+elif [[ ${#BAD_ITEMS[@]} -gt 0 ]]; then
+    # Re-sign only what failed, then every bundle that contains it (its seal
+    # covers the changed file), deepest first; everything else keeps the export's
+    # signature.
+    echo "==> re-signing ${#BAD_ITEMS[@]} item(s) and their containing bundles"
+    {
+        for item in "${BAD_ITEMS[@]}"; do
+            echo "$item"
+            parent="$(dirname "$item")"
+            while [[ "$parent" != "$APP" && "$parent" == "$APP"/* ]]; do
+                case "$parent" in
+                    *.framework | *.xpc | *.app | *.appex | *.bundle) echo "$parent" ;;
+                esac
+                parent="$(dirname "$parent")"
+            done
+        done
+    } | sort -u | by_depth_desc | while read -r item; do resign "$item"; done
     codesign --force --options runtime --timestamp --keychain "$KC" \
         --entitlements "$ROOT/VoiceInk/VoiceInk.local.entitlements" --sign "$SIGN_IDENTITY" "$APP"
 fi
