@@ -7,6 +7,8 @@
 #   UPSTREAM_URL  upstream repository (default https://github.com/Beingpax/VoiceInk.git)
 #   UPSTREAM_REF  optional override "owner/repo:ref" for dry-run tests only
 #   DRY_RUN       "true" = rebase and report, push nothing
+#   SYNC_RESULT   optional file: key=value lines for notify.sh (result, error, stopped,
+#                 subject, base, one conflict= line per file)
 set -euo pipefail
 
 UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/Beingpax/VoiceInk.git}"
@@ -16,11 +18,18 @@ SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 
 summary() { printf '%s\n' "$@" >> "$SUMMARY"; }
 
+RESULT="${SYNC_RESULT:-}"
+note() { if [[ -n "$RESULT" ]]; then printf '%s=%s\n' "$1" "$2" >> "$RESULT"; fi; }
+fail() { note result error; note error "$1"; echo "::error::$1"; exit 1; }
+if [[ -n "$RESULT" ]]; then : > "$RESULT"; fi
+# Any other failing command: record it for the Telegram message, then set -e exits.
+trap 'note result error; note error "line $LINENO: $BASH_COMMAND failed"' ERR
+
 git config user.name "Oleg Kossoy"
 git config user.email "51094+kossoy@users.noreply.github.com"
 
 if [[ -n "$UPSTREAM_REF" ]]; then
-    [[ "$DRY_RUN" == "true" ]] || { echo "::error::upstream_ref overrides are for dry runs only"; exit 1; }
+    [[ "$DRY_RUN" == "true" ]] || fail "upstream_ref overrides are for dry runs only"
     SOURCE_URL="https://github.com/${UPSTREAM_REF%%:*}.git"
     SOURCE_REF="${UPSTREAM_REF#*:}"
 else
@@ -47,8 +56,7 @@ echo "fork layer ($LAYER commits on ${BASE:0:10}):"
 git log --oneline "$BASE..$OLD_MAIN"
 
 if [[ "$LAYER" == 0 ]]; then
-    echo "::error::main has no OKLabs commits on top of upstream; refusing to sync"
-    exit 1
+    fail "main has no OKLabs commits on top of upstream; refusing to sync"
 fi
 
 if [[ "$NEW_UPSTREAM" == "$OLD_UPSTREAM" ]] && git merge-base --is-ancestor "$NEW_UPSTREAM" "$OLD_MAIN"; then
@@ -70,8 +78,11 @@ git checkout --quiet -B oklabs-sync "$OLD_MAIN"
 if ! git rebase --onto "$NEW_UPSTREAM" "$BASE" oklabs-sync; then
     STOPPED="$(git rev-parse --short REBASE_HEAD 2>/dev/null || echo '?')"
     SUBJECT="$(git log -1 --format=%s REBASE_HEAD 2>/dev/null || echo '?')"
-    CONFLICTS="$(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+    CONFLICT_LIST="$(git diff --name-only --diff-filter=U || true)"
+    CONFLICTS="$(printf '%s' "$CONFLICT_LIST" | tr '\n' ' ')"
     git rebase --abort || true
+    note result conflict; note stopped "$STOPPED"; note subject "$SUBJECT"; note base "$BASE"
+    while IFS= read -r f; do [[ -z "$f" ]] || note conflict "$f"; done <<< "$CONFLICT_LIST"
     echo "::error title=oklabs-sync: rebase conflict::$STOPPED \"$SUBJECT\" conflicts in: $CONFLICTS"
     summary "- result: **rebase conflict**, nothing pushed" \
         "- stopped at fork commit \`$STOPPED\` $SUBJECT" \
@@ -88,7 +99,7 @@ if [[ "$NEW_LAYER" != "$LAYER" ]]; then
     echo "::warning::$((LAYER - NEW_LAYER)) fork commit(s) became empty and were dropped (upstream has the same change)"
 fi
 for required in .github/workflows/oklabs-release.yml .github/workflows/oklabs-sync.yml .oklabs/ci/sync.sh; do
-    [[ -f "$required" ]] || { echo "::error::$required missing after rebase; refusing to push"; exit 1; }
+    [[ -f "$required" ]] || fail "$required missing after rebase; refusing to push"
 done
 summary "- rebased main: \`${NEW_MAIN:0:10}\` ($NEW_LAYER fork commits)"
 
@@ -100,7 +111,9 @@ fi
 
 # Atomic, and only if nobody moved either branch meanwhile. The push uses the
 # OKLABS_SYNC_TOKEN credentials from checkout, so it starts oklabs-release.
-git push --atomic origin \
+if ! git push --atomic origin \
     --force-with-lease="upstream:$OLD_UPSTREAM" --force-with-lease="main:$OLD_MAIN" \
-    "$NEW_UPSTREAM:refs/heads/upstream" "$NEW_MAIN:refs/heads/main"
+    "$NEW_UPSTREAM:refs/heads/upstream" "$NEW_MAIN:refs/heads/main"; then
+    fail "push rejected (main or upstream moved during the sync, or the token lost access); nothing pushed"
+fi
 summary "- result: **pushed** upstream and main; oklabs-release builds the new main"

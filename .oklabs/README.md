@@ -13,7 +13,7 @@ managed mode, Developer ID builds on GitHub Actions, and no Sparkle.
 | `#if OKLABS` hooks in upstream files | `UpdaterViewModel`, `VoiceInk.swift`, `ElevenLabsProvider`, `CustomVocabularyService`, `StreamingTranscriptionService`, `TranscriptionSession`, `TranscriptionPipeline`, `TranscriptionOutputFilter`, `CursorPaster`, `AudioFileTranscriptionService`, `AudioFileTranscriptionManager` |
 | `Package.swift`, `Tests/ScribeCoreTests`, `Tests/ScribeBenchKitTests` | `swift test`: unit tests and live-session scenarios against a scripted WebSocket server |
 | `.oklabs/scribe-bench/` | `scribe-bench`, the real-voice harness (aggregate numbers only) |
-| `.oklabs/ci/` | keychain, archive, notarize, package, bench and sync scripts |
+| `.oklabs/ci/` | keychain, archive, notarize, package, bench, sync and Telegram notify scripts |
 | `.github/workflows/oklabs-*.yml` | `oklabs-test`, `oklabs-release`, `oklabs-sync` |
 
 Branches: `upstream` mirrors Beingpax `main`; `main` = `upstream` + the OKLabs commits.
@@ -22,7 +22,8 @@ Branches: `upstream` mirrors Beingpax `main`; `main` = `upstream` + the OKLabs c
 
 - **Test** (`oklabs-test.yml`, every push to a branch other than `main`/`upstream`): `swift test`
   and an unsigned app compile with `LOCAL_BUILD OKLABS`.
-- **Release** (`oklabs-release.yml`, push to `main` or manual): runs the tests, then on a
+- **Release** (`oklabs-release.yml`, push to `main` or manual; a push that touches only docs,
+  `oklabs-sync.yml`, `sync.sh` or `notify.sh` does not release): runs the tests, then on a
   GitHub-hosted `macos-26` runner builds whisper.cpp (pinned tag, macOS slice), archives with
   `LOCAL_BUILD OKLABS` and the local entitlements, exports with Developer ID, checks every nested
   signature, notarizes and staples the app and the DMG, signs and notarizes `scribe-bench`, and
@@ -35,13 +36,42 @@ Branches: `upstream` mirrors Beingpax `main`; `main` = `upstream` + the OKLabs c
   `GITHUB_TOKEN` can neither push rewritten workflow files nor start other workflows). That push
   starts a release. Unchanged upstream = no-op. **A rebase conflict aborts, pushes nothing and
   fails the run**: the Actions tab shows it red, with the fork commit and files in the run
-  summary, and the last good release stays `latest`. Fix it locally:
+  summary, Telegram gets the same details, and the last good release stays `latest`. Fix it locally:
   `git fetch upstream && git rebase --onto upstream/main <base from the summary> main`, resolve,
   `git push --force-with-lease origin main` and push the new `upstream`. Manual runs take
   `dry_run` and a test-only `upstream_ref` (`owner/repo:ref`).
 - **Update on the Mac**: Sparkle is off (`UpdaterViewModel.isSparkleDisabled`, and CI strips
   `SUFeedURL`/`SUPublicEDKey`), so upstream can never replace the fork build. Updates come from
   `releases/latest` through the command below.
+
+## Notifications
+
+`.oklabs/ci/notify.sh` sends Telegram messages through a bot. The token and the chat live only
+in the repo secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; GitHub masks them in logs. A
+message that cannot be delivered is a warning in the log and never fails a job.
+
+| Event | Message |
+|---|---|
+| `oklabs-release` published a build | «Новая сборка VoiceInk `<version>`», one line on what changed since the previous release on another commit (upstream +N commits with their subjects, new fork commits, changed build inputs), the update command below, the release link. Sent even if the download check after publish failed, with a line saying so |
+| any `oklabs-release` job failed or was cancelled | «VoiceInk release упал», the job results, the run URL |
+| `oklabs-sync` rebase conflict | «VoiceInk sync: конфликт с upstream», the fork commit, the conflicting files, the rebase command, the run URL |
+| any other `oklabs-sync` failure, timeout or cancel | «VoiceInk sync упал», the failing command or the cancel, the run URL (a fallback text if even the checkout failed) |
+| no-op night, clean sync, dry run without a conflict | nothing |
+
+A push whose diff since the previous release touches only CI, docs, tests or the bench
+(`.github/`, `*.md`, `Tests/`, `Package.swift`, `.oklabs/scribe-bench/`, `sync.sh`,
+`notify.sh`) is still released but not announced. Build inputs in `oklabs-release.yml`
+(`DEVELOPER_DIR`, `WHISPER_TAG`, `SIGN_IDENTITY`, `TEAM_ID`) count as app changes. Manual
+release runs are always announced. A re-run compares with the newest release on another
+commit, never with the release its own first attempt published.
+
+Test the channel without a build: a manual `oklabs-release` run with `telegram_test` sends one
+`[TEST]` message, the new-build text for the current latest release, and builds nothing. It
+is the only Telegram path that turns a run red, when the message was not delivered.
+
+```bash
+gh workflow run oklabs-release.yml -R kossoy/VoiceInk -f telegram_test=true
+```
 
 ## Mac: install, update, roll back
 
