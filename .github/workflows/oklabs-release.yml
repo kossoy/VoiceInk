@@ -15,9 +15,19 @@ concurrency:
   group: oklabs-release
   cancel-in-progress: false
 
+# Explicit bash: -eo pipefail, so `cmd | tee` fails when cmd fails.
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  test:
+    name: Tests
+    uses: ./.github/workflows/oklabs-test.yml
+
   release:
     name: Build, sign, notarize, release
+    needs: test
     runs-on: macos-26
     timeout-minutes: 150
     env:
@@ -118,6 +128,9 @@ jobs:
       - name: Archive and export (Developer ID)
         run: bash .oklabs/ci/archive.sh
 
+      - name: scribe-bench harness (sign, notarize)
+        run: bash .oklabs/ci/bench.sh
+
       - name: Notarize, staple, package
         run: bash .oklabs/ci/package.sh
 
@@ -144,7 +157,7 @@ jobs:
             --title "VoiceInk OKLabs $OKLABS_VERSION" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             --latest \
-            "$D/VoiceInk-oklabs.zip" "$D/VoiceInk-oklabs.dmg" "$D/SHA256SUMS"
+            "$D/VoiceInk-oklabs.zip" "$D/VoiceInk-oklabs.dmg" "$D/scribe-bench-macos-arm64.zip" "$D/SHA256SUMS"
 
       - name: Check the stable download URL
         run: |
@@ -154,8 +167,10 @@ jobs:
             curl -fsSLO "$BASE/SHA256SUMS" && grep -q "$(cut -d' ' -f1 "$OUT_DIR/dist/SHA256SUMS" | head -1)" SHA256SUMS && break
             sleep 10
           done
+          cmp -s SHA256SUMS "$OUT_DIR/dist/SHA256SUMS" || { echo "error: releases/latest still serves another release" >&2; exit 1; }
           curl -fsSLO "$BASE/VoiceInk-oklabs.zip"
-          grep VoiceInk-oklabs.zip SHA256SUMS | shasum -a 256 -c -
+          # Against this build's own sums, so a stale /latest can never pass.
+          grep VoiceInk-oklabs.zip "$OUT_DIR/dist/SHA256SUMS" | shasum -a 256 -c -
           echo "### VoiceInk OKLabs $OKLABS_VERSION" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"; cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
 
