@@ -155,7 +155,9 @@ class TranscriptionPipeline {
                 text = ParagraphFormatter.format(text)
             }
 
-            text = WordReplacementService.shared.applyReplacements(to: text, using: modelContext)
+            if OKLabsSettings.appliesWordReplacements {
+                text = WordReplacementService.shared.applyReplacements(to: text, using: modelContext)
+            }
             let cleanedText = text
 
             let actualDuration = await AudioFileMetadata.duration(for: audioURL)
@@ -274,6 +276,20 @@ class TranscriptionPipeline {
                     )
                 }
             }
+
+            #if OKLABS
+            // Not for a user cancel: upstream shows nothing and overwrites the record.
+            if !(error is NativeAppleTranscriptionService.ServiceError), !(error is CancellationError), !shouldCancel() {
+                FailureNotice.show(
+                    description: errorDescription,
+                    audioURL: audioURL,
+                    model: model,
+                    modelContext: modelContext,
+                    serviceRegistry: serviceRegistry,
+                    enhancementService: enhancementService
+                )
+            }
+            #endif
 
             transcription.text = String(format: String(localized: "Transcription Failed: %@"), errorDescription)
             transcription.transcriptionStatus = TranscriptionStatus.failed.rawValue

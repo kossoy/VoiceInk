@@ -56,7 +56,13 @@ struct ElevenLabsProvider: CloudProvider {
     }
 
     func makeStreamingProvider(vocabulary: RecordingVocabulary) -> (any StreamingTranscriptionProvider)? {
-        ElevenLabsStreamingProvider(customVocabulary: vocabulary.terms)
+        #if OKLABS
+        // OKLabs fork engine; `defaults write … oklabs.scribeEngine upstream` switches back.
+        if OKLabsSettings.usesForkScribeEngine {
+            return ScribeRealtimeProvider(keyterms: vocabulary.terms)
+        }
+        #endif
+        return ElevenLabsStreamingProvider(customVocabulary: vocabulary.terms)
     }
 
     func verifyAPIKey(_ key: String) async -> (isValid: Bool, errorMessage: String?) {

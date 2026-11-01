@@ -66,6 +66,10 @@ final class StreamingTranscriptionSession: TranscriptionSession {
     private var isCancelled = false
     private var startupTask: Task<Void, Never>?
     private var startupTaskID: UUID?
+    #if OKLABS
+    /// Bad key, quota, terms at connect: reported at stop instead of a batch re-upload.
+    private var fatalStartupError: Error?
+    #endif
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "StreamingTranscriptionSession")
 
     init(streamingService: StreamingTranscriptionService, fallbackService: TranscriptionService) {
@@ -82,6 +86,9 @@ final class StreamingTranscriptionSession: TranscriptionSession {
 
         self.model = model
         self.context = context
+        #if OKLABS
+        fatalStartupError = nil
+        #endif
         logger.notice("Streaming session prepare model=\(model.displayName, privacy: .public)")
 
         // Start the provider in the background.
@@ -120,6 +127,9 @@ final class StreamingTranscriptionSession: TranscriptionSession {
                 let desc = error.localizedDescription
                 self.logger.error("❌ Failed to start streaming, will fall back to batch: \(desc, privacy: .public)")
                 self.streamingFailed = true
+                #if OKLABS
+                if OKLabsStreamingPolicy.skipsBatchFallback(error) { self.fatalStartupError = error }
+                #endif
             }
         }
 
@@ -164,12 +174,25 @@ final class StreamingTranscriptionSession: TranscriptionSession {
                 if isCancelled || Task.isCancelled || error is CancellationError {
                     throw CancellationError()
                 }
+                #if OKLABS
+                // Bad key, quota, terms: a batch re-upload would fail the same way.
+                if OKLabsStreamingPolicy.skipsBatchFallback(error) {
+                    logger.error("❌ Streaming failed with a non-retryable error: \(error, privacy: .public)")
+                    throw error
+                }
+                #endif
                 logger.error("❌ Streaming failed, falling back to batch: \(error, privacy: .public)")
             }
         }
 
         stopStreaming()
         try checkCancellation()
+        #if OKLABS
+        if let fatalStartupError {
+            logger.error("❌ Streaming could not start, non-retryable: \(fatalStartupError, privacy: .public)")
+            throw fatalStartupError
+        }
+        #endif
 
         let fallbackStart = Date()
         logger.notice(

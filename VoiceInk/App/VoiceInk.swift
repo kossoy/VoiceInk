@@ -48,6 +48,10 @@ struct VoiceInkApp: App {
         AppLanguagePreference.applyStored()
         AppAppearancePreference.applyStored()
         OnboardingV2Migration.prepareIfNeeded()
+        #if OKLABS
+        // After the migration, which would otherwise delete the managed mode.
+        ManagedSettings.applyAtLaunch()
+        #endif
 
         let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "Initialization")
         // Keep existing model order stable; append new models after synced entities.
