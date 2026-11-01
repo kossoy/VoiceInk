@@ -1,57 +1,138 @@
-# OKLabs fork layer
+# VoiceInk OKLabs fork
 
-This is `kossoy/VoiceInk`, a fork of [Beingpax/VoiceInk](https://github.com/Beingpax/VoiceInk).
+`kossoy/VoiceInk` is [Beingpax/VoiceInk](https://github.com/Beingpax/VoiceInk) plus a small fork
+layer: an ElevenLabs Scribe v2 Realtime engine ported from voxtype, verbatim-output defaults, a
+managed mode, Developer ID builds on GitHub Actions, and no Sparkle.
 
-- `upstream` mirrors Beingpax `main`; `main` is upstream plus the OKLabs commits.
-- Fork code lives in `VoiceInk/OKLabs/**`, `Tests/ScribeCoreTests`, `Tests/ScribeBenchKitTests`,
-  `.oklabs/**`, `Package.swift` and `.github/workflows/oklabs-*.yml`, plus small hooks in
-  upstream files guarded by `#if OKLABS`.
+## Map
 
-## Build and release
+| Path | What |
+|---|---|
+| `VoiceInk/OKLabs/ScribeCore/` | Scribe engine, Foundation only: framing, segmenter, commit ledger, keyterms, URL/wire format, `ScribeLiveSession` |
+| `VoiceInk/OKLabs/*.swift` | app side: `ScribeRealtimeProvider`, `ManagedSettings`, `FailureNotice`, `OKLabsSettings`, keyterms file |
+| `#if OKLABS` hooks in upstream files | `UpdaterViewModel`, `VoiceInk.swift`, `ElevenLabsProvider`, `CustomVocabularyService`, `StreamingTranscriptionService`, `TranscriptionSession`, `TranscriptionPipeline`, `TranscriptionOutputFilter`, `CursorPaster`, `AudioFileTranscriptionService`, `AudioFileTranscriptionManager` |
+| `Package.swift`, `Tests/ScribeCoreTests`, `Tests/ScribeBenchKitTests` | `swift test`: unit tests and live-session scenarios against a scripted WebSocket server |
+| `.oklabs/scribe-bench/` | `scribe-bench`, the real-voice harness (aggregate numbers only) |
+| `.oklabs/ci/` | keychain, archive, notarize, package, bench and sync scripts |
+| `.github/workflows/oklabs-*.yml` | `oklabs-test`, `oklabs-release`, `oklabs-sync` |
 
-- `oklabs-release.yml` (push to `main`): runs `oklabs-test.yml`, then builds on a GitHub-hosted
-  macOS runner with `LOCAL_BUILD OKLABS`, signs with Developer ID, notarizes and staples the app
-  and the DMG, signs and notarizes the `scribe-bench` harness, and publishes a release.
-  Stable URL: `https://github.com/kossoy/VoiceInk/releases/latest/download/VoiceInk-oklabs.zip`.
-- `oklabs-test.yml` (every other branch): `swift test` for ScribeCore and the harness, plus an
-  unsigned app compile.
-- Sparkle is disabled (`UpdaterViewModel.isSparkleDisabled`); CI removes `SUFeedURL` and
-  `SUPublicEDKey` from `Info.plist`, so an upstream release can never replace the fork build.
-- Version: `CFBundleShortVersionString = <upstream>+oklabs.<UTC yyyymmddHHMM>.<sha7>`,
-  `CFBundleVersion = <upstream build>.<run number>`.
-- whisper.cpp is pinned (`WHISPER_TAG`) and only the macOS slice is built (`.oklabs/build-whisper.sh`).
+Branches: `upstream` mirrors Beingpax `main`; `main` = `upstream` + the OKLabs commits.
 
-## Scribe engine (`VoiceInk/OKLabs/ScribeCore`)
+## Flows
 
-A Swift port of voxtype's ElevenLabs Scribe v2 Realtime engine: 100 ms frames, client commits at
-the first pause after 30 s and always by 34 s, every commit counted and answered, final segment
-padded to 0.35 s, `commit_throttled` counted as answered, a 2 s write-stall detector, and a final
-wait of at most 8 s counted from the stop request. A failed stream sends the whole recording to
-batch `scribe_v2`; errors a retry cannot fix (bad key, quota) are reported without a retry.
+- **Test** (`oklabs-test.yml`, every push to a branch other than `main`/`upstream`): `swift test`
+  and an unsigned app compile with `LOCAL_BUILD OKLABS`.
+- **Release** (`oklabs-release.yml`, push to `main` or manual): runs the tests, then on a
+  GitHub-hosted `macos-26` runner builds whisper.cpp (pinned tag, macOS slice), archives with
+  `LOCAL_BUILD OKLABS` and the local entitlements, exports with Developer ID, checks every nested
+  signature, notarizes and staples the app and the DMG, signs and notarizes `scribe-bench`, and
+  publishes `oklabs-<upstream version>-<run>` as the latest release with `VoiceInk-oklabs.zip`,
+  `VoiceInk-oklabs.dmg`, `scribe-bench-macos-arm64.zip` and `SHA256SUMS`. Version:
+  `<upstream>+oklabs.<UTC yyyymmddHHMM>.<sha7>`, build `<upstream build>.<run>`.
+- **Sync** (`oklabs-sync.yml`, nightly 01:17 UTC or manual): fetches Beingpax `main`; if it moved,
+  rebases the OKLabs commits onto it and pushes `upstream` and `main` atomically with
+  `--force-with-lease`, using the `OKLABS_SYNC_TOKEN` secret (a token with the `workflow` scope;
+  `GITHUB_TOKEN` can neither push rewritten workflow files nor start other workflows). That push
+  starts a release. Unchanged upstream = no-op. **A rebase conflict aborts, pushes nothing and
+  fails the run**: the Actions tab shows it red, with the fork commit and files in the run
+  summary, and the last good release stays `latest`. Fix it locally:
+  `git fetch upstream && git rebase --onto upstream/main <base from the summary> main`, resolve,
+  `git push --force-with-lease origin main` and push the new `upstream`. Manual runs take
+  `dry_run` and a test-only `upstream_ref` (`owner/repo:ref`).
+- **Update on the Mac**: Sparkle is off (`UpdaterViewModel.isSparkleDisabled`, and CI strips
+  `SUFeedURL`/`SUPublicEDKey`), so upstream can never replace the fork build. Updates come from
+  `releases/latest` through the command below.
 
-## Settings (`defaults write com.prakashjoshipax.VoiceInk <key> …`)
+## Mac: install, update, roll back
 
-| Key | Default | Meaning |
+Install/update command, created once (it verifies the checksum, the signature and Gatekeeper,
+keeps the previous app as `VoiceInk.app.old`, and swaps in a staged copy with `mv`):
+
+```bash
+mkdir -p ~/.local/bin && cat > ~/.local/bin/voiceink-oklabs-update <<'SH'
+#!/bin/bash
+set -euo pipefail
+T=$(mktemp -d ~/Downloads/voiceink-oklabs.XXXX); cd "$T"
+curl -fLO https://github.com/kossoy/VoiceInk/releases/latest/download/VoiceInk-oklabs.zip
+curl -fLO https://github.com/kossoy/VoiceInk/releases/latest/download/SHA256SUMS
+grep VoiceInk-oklabs.zip SHA256SUMS | shasum -a 256 -c -
+ditto -x -k VoiceInk-oklabs.zip staged
+codesign --verify --deep --strict staged/VoiceInk.app
+codesign -dv staged/VoiceInk.app 2>&1 | grep -q 'TeamIdentifier=LA9V2K2376'
+spctl -a -t exec -vv staged/VoiceInk.app
+if pgrep -xq VoiceInk; then osascript -e 'quit app "VoiceInk"' || true; sleep 2; fi
+mkdir -p ~/Applications; rm -rf ~/Applications/VoiceInk.app.old
+if [ -d ~/Applications/VoiceInk.app ]; then mv ~/Applications/VoiceInk.app ~/Applications/VoiceInk.app.old; fi
+mv staged/VoiceInk.app ~/Applications/VoiceInk.app
+/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ~/Applications/VoiceInk.app/Contents/Info.plist
+cd ~; rm -rf "$T"
+[ -n "${VOICEINK_NO_OPEN:-}" ] || open ~/Applications/VoiceInk.app
+SH
+chmod +x ~/.local/bin/voiceink-oklabs-update
+```
+
+Update (same command):
+
+```bash
+bash ~/.local/bin/voiceink-oklabs-update
+```
+
+Roll back to the previous build:
+
+```bash
+pgrep -xq VoiceInk && osascript -e 'quit app "VoiceInk"'; sleep 2; rm -rf ~/Applications/VoiceInk.app && mv ~/Applications/VoiceInk.app.old ~/Applications/VoiceInk.app && open ~/Applications/VoiceInk.app
+```
+
+Switch back to the upstream streaming engine without reinstalling (and forward again with `oklabs`):
+
+```bash
+defaults write com.prakashjoshipax.VoiceInk oklabs.scribeEngine -string upstream
+```
+
+The first install over an ad-hoc `make local` build needs one permission reset, because the
+grants belong to the old signature; Developer ID builds keep them across updates:
+
+```bash
+for s in Microphone Accessibility ScreenCapture AppleEvents PostEvent ListenEvent; do tccutil reset $s com.prakashjoshipax.VoiceInk; done
+```
+
+## Settings: `oklabs.*` defaults keys
+
+`defaults write com.prakashjoshipax.VoiceInk <key> <value>`; restart the app afterwards.
+
+| Key | Type, default | Meaning |
 |---|---|---|
-| `oklabs.scribeEngine` | `oklabs` | `upstream` switches back to LLMkit's client |
-| `oklabs.keytermsFile` | unset | keyterms file (one per line, `#` comments, or a JSON array); goes first, in file order |
-| `oklabs.managedMode` | `false` | restore the managed "Scribe" mode (Scribe V2 realtime, language auto, no AI, every other mode off) on each launch |
-| `oklabs.stripBracketedText` | `false` | upstream's removal of `()`, `[]`, `{}` and `<tag>…</tag>` |
-| `oklabs.applyWordReplacements` | `false` | Dictionary → Word Replacements |
-| `oklabs.prePasteDelayMs` | `200` | delay before paste, 0-500 ms |
-| `oklabs.notifyOnFailure` | `true` | notification with Retry when a cloud transcription fails |
-| `oklabs.scribeEndpoint` | unset | realtime endpoint override |
+| `oklabs.scribeEngine` | string, `oklabs` | `upstream` = LLMkit's ElevenLabs client instead of the fork engine |
+| `oklabs.keytermsFile` | string, unset | keyterms file: one term per line (`#` comments) or a JSON array; first in file order, max 50 × 20 characters, re-read for every recording |
+| `oklabs.managedMode` | bool, `false` | on every launch (after onboarding), make the "Scribe" mode default: Scribe V2 realtime, language auto, no AI, no screen/selection/clipboard context; disable every other mode |
+| `oklabs.stripBracketedText` | bool, `false` | upstream's removal of `()`, `[]`, `{}` and `<tag>…</tag>` from transcripts |
+| `oklabs.applyWordReplacements` | bool, `false` | apply Dictionary → Word Replacements |
+| `oklabs.prePasteDelayMs` | int, `200` | delay before paste, clamped to 0-500 ms |
+| `oklabs.notifyOnFailure` | bool, `true` | notification with Retry (re-transcribes, copies to the clipboard) when a transcription fails |
+| `oklabs.scribeEndpoint` | string, unset | realtime endpoint override, e.g. a regional `wss://…/v1/speech-to-text/realtime` |
 
-The fork also registers `IsAutomaticVocabularyCorrectionEnabled`, `IsAutoLearnDictionaryEnabled`,
-`VoiceInkChecksForUpdatesOnLaunch` and `enableAnnouncements` as `false` by default. The build
-ships no keyterms; the list lives in the user's keyterms file.
+The fork also registers these upstream keys as `false` by default:
+`IsAutomaticVocabularyCorrectionEnabled`, `IsAutoLearnDictionaryEnabled`,
+`VoiceInkChecksForUpdatesOnLaunch`, `enableAnnouncements`. The ElevenLabs key lives in the login
+Keychain (service `com.prakashjoshipax.VoiceInk.Local`, account `elevenLabsAPIKey`); a Data value
+written to `LocalKeychain_elevenLabsAPIKey` is moved there on first use. The build ships no
+keyterms.
 
-## Real-voice harness (`scribe-bench`)
+## Scribe engine behaviour
 
-Runs on the user's Mac against local recordings (default: Raycast's
-`~/Library/Application Support/com.raycast.macos/dictation-recordings`). It streams each WAV
-through the same `ScribeLiveSession` the app uses and prints only aggregate numbers: WER and
-Latin-term retention (scored like the dictation benchmark: NFC, lowercase, ё→е, punctuation
-ignored), failures, stop-to-text latency at upload speed and at 1x, and an A/B of VoiceInk's
-capture resampler against AVAudioConverter. No file names, ids or text are printed or written.
-Without `--refs` the reference is batch `scribe_v2` (agreement, not ground truth).
+100 ms frames; the client commits at the first 0.3 s pause after 30 s and always by 34 s, so the
+server's ~36 s auto-commit never fires; every commit is counted and answered (`commit_throttled`
+counts as an answer, unsolicited server commits are kept), and all segments are joined; the final
+segment is padded to 0.35 s; a socket write blocked for 2 s marks the stream failed; after stop
+the wait is at most 8 s, counted from the stop request. A failed stream re-uploads the whole
+recording to batch `scribe_v2`; a bad key, quota or terms error is reported without a retry.
+
+## Real-voice harness
+
+`scribe-bench` (release asset) streams local recordings (default: Raycast's
+`~/Library/Application Support/com.raycast.macos/dictation-recordings`) through the same
+`ScribeLiveSession` and prints only aggregate numbers: WER and Latin-term retention scored like
+the dictation benchmark, failures, stop-to-text latency at upload speed and at 1x, and an A/B of
+VoiceInk's capture resampler against AVAudioConverter on recordings made at ≥ 32 kHz. Nothing
+else is printed or written. `scribe-bench --help` lists the options; it needs
+`ELEVENLABS_API_KEY` in the environment.
