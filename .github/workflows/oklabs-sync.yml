@@ -1,0 +1,48 @@
+# OKLabs fork: nightly sync with Beingpax/VoiceInk (plan C.3).
+# Mirrors upstream main into `upstream`, rebases the OKLabs commits on `main`
+# onto it and pushes with OKLABS_SYNC_TOKEN, so the push starts oklabs-release.
+# GITHUB_TOKEN cannot push rewritten workflow files and its pushes start no
+# workflows. A rebase conflict fails the run and pushes nothing.
+name: oklabs-sync
+
+on:
+  schedule:
+    - cron: '17 1 * * *'   # 01:17 UTC = 03:17/04:17 Israel
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Rebase and report, push nothing
+        type: boolean
+        default: false
+      upstream_ref:
+        description: 'Test override "owner/repo:ref" (dry runs only); empty = Beingpax/VoiceInk main'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oklabs-sync
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sync:
+    name: Rebase OKLabs commits onto upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.OKLABS_SYNC_TOKEN }}
+      - name: Sync
+        env:
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          UPSTREAM_REF: ${{ inputs.upstream_ref || '' }}
+        run: bash .oklabs/ci/sync.sh
