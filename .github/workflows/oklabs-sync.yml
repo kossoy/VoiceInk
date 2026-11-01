@@ -3,6 +3,8 @@
 # onto it and pushes with OKLABS_SYNC_TOKEN, so the push starts oklabs-release.
 # GITHUB_TOKEN cannot push rewritten workflow files and its pushes start no
 # workflows. A rebase conflict fails the run and pushes nothing.
+# Telegram: a conflict or any other failure sends one message (.oklabs/ci/notify.sh);
+# a no-op night or a clean sync sends nothing (the release run reports the new build).
 name: oklabs-sync
 
 on:
@@ -45,4 +47,24 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           UPSTREAM_REF: ${{ inputs.upstream_ref || '' }}
+          SYNC_RESULT: ${{ runner.temp }}/oklabs-sync.result
         run: bash .oklabs/ci/sync.sh
+      # Never fails the job; also on a timeout or cancel. Without notify.sh the checkout
+      # itself failed (for example an expired OKLABS_SYNC_TOKEN): a plain fallback text.
+      - name: Telegram (conflict or failure)
+        if: failure() || cancelled()
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SYNC_RESULT: ${{ runner.temp }}/oklabs-sync.result
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ -f .oklabs/ci/notify.sh ]; then exec bash .oklabs/ci/notify.sh sync-failed; fi
+          [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] || { echo "::warning::Telegram secrets not set"; exit 0; }
+          TEXT="$(printf 'VoiceInk sync упал на checkout (OKLABS_SYNC_TOKEN?)\n%s' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
+          curl -sS -m 20 --retry 3 --retry-delay 5 -o /dev/null -w 'Telegram: HTTP %{http_code}\n' \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" --data-urlencode "text=$TEXT" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" || true

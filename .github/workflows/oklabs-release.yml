@@ -1,23 +1,32 @@
 # OKLabs fork: build VoiceInk on a GitHub-hosted macOS runner, sign it with
 # Developer ID, notarize + staple app and DMG, publish a GitHub release.
 # Stable download URL: https://github.com/kossoy/VoiceInk/releases/latest/download/VoiceInk-oklabs.zip
+# Telegram (.oklabs/ci/notify.sh): a message after a published release whose app code
+# changed, and one when any job fails. Manual run with telegram_test = one [TEST]
+# message, no build.
 name: oklabs-release
 
 on:
   push:
     branches: [main]
-    # Docs and sync-tooling commits need no new build.
+    # Docs, sync and notification tooling commits need no new build.
     paths-ignore:
       - '**/*.md'
       - '.github/workflows/oklabs-sync.yml'
       - '.oklabs/ci/sync.sh'
+      - '.oklabs/ci/notify.sh'
   workflow_dispatch:
+    inputs:
+      telegram_test:
+        description: 'Only send one [TEST] Telegram message (the new-build text for the latest release); no build'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: oklabs-release
+  group: oklabs-release${{ inputs.telegram_test && '-telegram-test' || '' }}
   cancel-in-progress: false
 
 # Explicit bash: -eo pipefail, so `cmd | tee` fails when cmd fails.
@@ -28,11 +37,13 @@ defaults:
 jobs:
   test:
     name: Tests
+    if: ${{ !inputs.telegram_test }}
     uses: ./.github/workflows/oklabs-test.yml
 
   release:
     name: Build, sign, notarize, release
     needs: test
+    if: ${{ !inputs.telegram_test }}
     runs-on: macos-26
     timeout-minutes: 150
     env:
@@ -139,7 +150,17 @@ jobs:
       - name: Notarize, staple, package
         run: bash .oklabs/ci/package.sh
 
+      # The newest release on another commit, so a re-run never compares with itself.
+      - name: Previous release (for the Telegram message)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --quiet --force --tags origin || true
+          echo "PREV_TAG=$(bash .oklabs/ci/notify.sh prev-tag)" | tee -a "$GITHUB_ENV"
+
       - name: Publish release
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -165,6 +186,7 @@ jobs:
             "$D/VoiceInk-oklabs.zip" "$D/VoiceInk-oklabs.dmg" "$D/scribe-bench-macos-arm64.zip" "$D/SHA256SUMS"
 
       - name: Check the stable download URL
+        id: urlcheck
         run: |
           T="$(mktemp -d)"; cd "$T"
           BASE="https://github.com/$GITHUB_REPOSITORY/releases/latest/download"
@@ -179,6 +201,19 @@ jobs:
           echo "### VoiceInk OKLabs $OKLABS_VERSION" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"; cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+      # Every published release, even if the download check failed (the text says so).
+      # Never fails the job; silent on a push that changed no app code or build input.
+      - name: Telegram (new build)
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHECK_OUTCOME: ${{ steps.urlcheck.outcome }}
+        run: bash .oklabs/ci/notify.sh release-ok
+
       - name: Upload build logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -191,3 +226,49 @@ jobs:
       - name: Remove signing keychain
         if: always()
         run: bash .oklabs/ci/keychain.sh cleanup
+
+  # Any failed or cancelled job: one plain-text message with the run URL. No checkout,
+  # so it works even when the repository cannot be fetched.
+  notify-failure:
+    name: Telegram (failure)
+    needs: [test, release]
+    if: ${{ always() && !inputs.telegram_test && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Telegram
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RESULTS: 'Tests: ${{ needs.test.result }}, release: ${{ needs.release.result }}'
+        run: |
+          [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] || { echo "::warning::Telegram secrets not set"; exit 0; }
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          TEXT="$(printf 'VoiceInk release упал\n%s\ncommit %s (%s)\nПоследний удачный release остаётся latest, если сбой был до publish.\n%s' \
+            "$RESULTS" "${GITHUB_SHA::7}" "$GITHUB_EVENT_NAME" "$RUN_URL")"
+          curl -sS -m 20 --retry 3 --retry-delay 5 -o /dev/null -w 'Telegram: HTTP %{http_code}\n' \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" --data-urlencode "text=$TEXT" \
+            --data-urlencode disable_web_page_preview=true \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" || true
+
+  # The one Telegram path that goes red: a test that delivered nothing must show it.
+  telegram-test:
+    name: Telegram test message
+    if: ${{ inputs.telegram_test }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Send one [TEST] message
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NOTIFY_LABEL: TEST
+        run: bash .oklabs/ci/notify.sh test
