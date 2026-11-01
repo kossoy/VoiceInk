@@ -52,20 +52,30 @@ keeps the previous app as `VoiceInk.app.old`, and swaps in a staged copy with `m
 mkdir -p ~/.local/bin && cat > ~/.local/bin/voiceink-oklabs-update <<'SH'
 #!/bin/bash
 set -euo pipefail
+trap 'echo "FAILED at line $LINENO: $BASH_COMMAND" >&2' ERR
 T=$(mktemp -d ~/Downloads/voiceink-oklabs.XXXX); cd "$T"
-curl -fLO https://github.com/kossoy/VoiceInk/releases/latest/download/VoiceInk-oklabs.zip
-curl -fLO https://github.com/kossoy/VoiceInk/releases/latest/download/SHA256SUMS
+echo "1/6 download"
+curl -fsSLO https://github.com/kossoy/VoiceInk/releases/latest/download/VoiceInk-oklabs.zip
+curl -fsSLO https://github.com/kossoy/VoiceInk/releases/latest/download/SHA256SUMS
 grep VoiceInk-oklabs.zip SHA256SUMS | shasum -a 256 -c -
+echo "2/6 unpack"
 ditto -x -k VoiceInk-oklabs.zip staged
+echo "3/6 verify signature"
 codesign --verify --deep --strict staged/VoiceInk.app
-codesign -dv staged/VoiceInk.app 2>&1 | grep -q 'TeamIdentifier=LA9V2K2376'
+# No `codesign | grep -q` here: grep -q closes the pipe early, codesign gets
+# SIGPIPE and pipefail aborts the script silently (seen on macOS 27.2).
+SIG=$(codesign -dv staged/VoiceInk.app 2>&1)
+case "$SIG" in *TeamIdentifier=LA9V2K2376*) echo "team OK";; *) echo "unexpected signature:"; echo "$SIG"; exit 1;; esac
+echo "4/6 gatekeeper"
 spctl -a -t exec -vv staged/VoiceInk.app
+echo "5/6 install"
 if pgrep -xq VoiceInk; then osascript -e 'quit app "VoiceInk"' || true; sleep 2; fi
 mkdir -p ~/Applications; rm -rf ~/Applications/VoiceInk.app.old
 if [ -d ~/Applications/VoiceInk.app ]; then mv ~/Applications/VoiceInk.app ~/Applications/VoiceInk.app.old; fi
 mv staged/VoiceInk.app ~/Applications/VoiceInk.app
 /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ~/Applications/VoiceInk.app/Contents/Info.plist
 cd ~; rm -rf "$T"
+echo "6/6 launch"
 [ -n "${VOICEINK_NO_OPEN:-}" ] || open ~/Applications/VoiceInk.app
 SH
 chmod +x ~/.local/bin/voiceink-oklabs-update
