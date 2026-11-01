@@ -1,0 +1,150 @@
+# OKLabs fork: build VoiceInk on a GitHub-hosted macOS runner, sign it with
+# Developer ID, notarize + staple app and DMG, publish a GitHub release.
+# Stable download URL: https://github.com/kossoy/VoiceInk/releases/latest/download/VoiceInk-oklabs.zip
+name: oklabs-release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: oklabs-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, sign, notarize, release
+    runs-on: macos-26
+    timeout-minutes: 150
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      SIGN_IDENTITY: "Developer ID Application: Oleg Kossoy (LA9V2K2376)"
+      TEAM_ID: LA9V2K2376
+      WHISPER_TAG: v1.9.5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain
+        run: |
+          echo "OUT_DIR=$RUNNER_TEMP/oklabs-out" >> "$GITHUB_ENV"
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+          cmake --version | head -1
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            echo "Metal toolchain missing; downloading"
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun metal --version | head -2
+
+      - name: Version
+        run: |
+          PBX=VoiceInk.xcodeproj/project.pbxproj
+          # The app target's Release block: MARKETING_VERSION sits right above its bundle id line.
+          MV="$(grep -B1 'PRODUCT_BUNDLE_IDENTIFIER = com.prakashjoshipax.VoiceInk;' "$PBX" | sed -n 's/.*MARKETING_VERSION = \(.*\);/\1/p' | head -1)"
+          UB="$(awk '/PRODUCT_BUNDLE_IDENTIFIER = com.prakashjoshipax.VoiceInk;/ {print last} /CURRENT_PROJECT_VERSION = / {last=$3}' "$PBX" | tr -d ';' | head -1)"
+          [ -n "$MV" ] && [ -n "$UB" ] || { echo "cannot read upstream version"; exit 1; }
+          SHA7="${GITHUB_SHA::7}"
+          STAMP="$(date -u +%Y%m%d%H%M)"
+          git fetch --quiet origin upstream || true
+          UPSTREAM_SHA="$(git merge-base HEAD origin/upstream 2>/dev/null || echo unknown)"
+          TAG="oklabs-${MV}-${GITHUB_RUN_NUMBER}"
+          [ "$GITHUB_RUN_ATTEMPT" = 1 ] || TAG="${TAG}-a${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "OKLABS_VERSION=${MV}+oklabs.${STAMP}.${SHA7}"
+            echo "OKLABS_BUILD=${UB}.${GITHUB_RUN_NUMBER}"
+            echo "OKLABS_TAG=${TAG}"
+            echo "UPSTREAM_SHA=${UPSTREAM_SHA}"
+          } | tee -a "$GITHUB_ENV"
+
+      - name: Cache whisper.xcframework
+        id: whisper-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/VoiceInk-Dependencies
+          key: whisper-${{ env.WHISPER_TAG }}-xcode26.6-${{ hashFiles('.oklabs/build-whisper.sh', '.oklabs/ci/whisper_macos_only.py') }}
+
+      - name: Build whisper.xcframework (macOS slice)
+        run: bash .oklabs/build-whisper.sh
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .build/SourcePackages
+          key: spm-${{ hashFiles('VoiceInk.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-
+
+      - name: Signing keychain
+        env:
+          MAC_DEVELOPER_ID_P12: ${{ secrets.MAC_DEVELOPER_ID_P12 }}
+          MAC_DEVELOPER_ID_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_PASSWORD }}
+          MAC_CERT_SHA256: ${{ secrets.MAC_CERT_SHA256 }}
+          MAC_NOTARY_APPLE_ID: ${{ secrets.MAC_NOTARY_APPLE_ID }}
+          MAC_NOTARY_PASSWORD: ${{ secrets.MAC_NOTARY_PASSWORD }}
+          MAC_NOTARY_TEAM: ${{ secrets.MAC_NOTARY_TEAM }}
+        run: bash .oklabs/ci/keychain.sh setup
+
+      - name: Archive and export (Developer ID)
+        run: bash .oklabs/ci/archive.sh
+
+      - name: Notarize, staple, package
+        run: bash .oklabs/ci/package.sh
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          D="$OUT_DIR/dist"
+          {
+            echo "VoiceInk OKLabs fork build \`$OKLABS_VERSION\` (CFBundleVersion $OKLABS_BUILD)."
+            echo
+            echo "- Fork commit: $GITHUB_SHA"
+            echo "- Upstream Beingpax/VoiceInk base: $UPSTREAM_SHA"
+            echo "- Signed with Developer ID Application: Oleg Kossoy (LA9V2K2376); app and DMG notarized and stapled."
+            echo "- Sparkle is disabled in this fork. Install or update with \`voiceink-oklabs-update\`."
+            echo
+            echo '```'
+            cat "$D/SHA256SUMS"
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$OKLABS_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "VoiceInk OKLabs $OKLABS_VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --latest \
+            "$D/VoiceInk-oklabs.zip" "$D/VoiceInk-oklabs.dmg" "$D/SHA256SUMS"
+
+      - name: Check the stable download URL
+        run: |
+          T="$(mktemp -d)"; cd "$T"
+          BASE="https://github.com/$GITHUB_REPOSITORY/releases/latest/download"
+          for i in 1 2 3 4 5 6; do
+            curl -fsSLO "$BASE/SHA256SUMS" && grep -q "$(cut -d' ' -f1 "$OUT_DIR/dist/SHA256SUMS" | head -1)" SHA256SUMS && break
+            sleep 10
+          done
+          curl -fsSLO "$BASE/VoiceInk-oklabs.zip"
+          grep VoiceInk-oklabs.zip SHA256SUMS | shasum -a 256 -c -
+          echo "### VoiceInk OKLabs $OKLABS_VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"; cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: ${{ runner.temp }}/oklabs-out/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove signing keychain
+        if: always()
+        run: bash .oklabs/ci/keychain.sh cleanup
