@@ -201,8 +201,14 @@ class StreamingTranscriptionService {
             throw StreamingTranscriptionError.notConnected
         }
 
-        if provider is FluidAudioUnifiedStreamingProvider, metrics.snapshot().droppedChunks > 0 {
-            logger.warning("Unified streaming dropped audio; using the full recording for batch transcription")
+        #if OKLABS
+        // OKLabs fork: a stream with holes is never pasted, whatever the provider.
+        let fallsBackOnDroppedAudio = true
+        #else
+        let fallsBackOnDroppedAudio = provider is FluidAudioUnifiedStreamingProvider
+        #endif
+        if fallsBackOnDroppedAudio, metrics.snapshot().droppedChunks > 0 {
+            logger.warning("Streaming dropped audio; using the full recording for batch transcription")
             state = .done
             await cleanupStreaming()
             return .requiresBatchFallback

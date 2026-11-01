@@ -23,7 +23,8 @@ class CursorPaster {
         let autoLearnGeneration: UInt64?
     }
 
-    private static let prePasteDelay: TimeInterval = 0.20
+    // OKLabs fork: `oklabs.prePasteDelayMs` (0-500 ms, default 200, upstream's fixed value).
+    private static var prePasteDelay: TimeInterval { OKLabsSettings.prePasteDelay }
     private static let pasteShortcutEventDelay: TimeInterval = 0.01
     private static let minimumClipboardRestoreDelay: TimeInterval = 0.25
 

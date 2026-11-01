@@ -189,7 +189,9 @@ class AudioTranscriptionManager: ObservableObject {
                 text = ParagraphFormatter.format(text)
             }
 
-            text = WordReplacementService.shared.applyReplacements(to: text, using: modelContext)
+            if OKLabsSettings.appliesWordReplacements {
+                text = WordReplacementService.shared.applyReplacements(to: text, using: modelContext)
+            }
             let cleanedText = text
             try Task.checkCancellation()
 

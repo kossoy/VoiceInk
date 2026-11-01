@@ -10,6 +10,8 @@ struct TranscriptionOutputFilter {
     static func filter(_ text: String) -> String {
         var filteredText = text
 
+        // OKLabs fork: bracket and tag stripping breaks verbatim dictation; off unless enabled.
+        if OKLabsSettings.stripsBracketedText {
         // Remove <TAG>...</TAG> blocks
         let tagBlockPattern = #"<([A-Za-z][A-Za-z0-9:_-]*)[^>]*>[\s\S]*?</\1>"#
         if let regex = try? NSRegularExpression(pattern: tagBlockPattern) {
@@ -24,6 +26,7 @@ struct TranscriptionOutputFilter {
                 filteredText = regex.stringByReplacingMatches(
                     in: filteredText, options: [], range: range, withTemplate: "")
             }
+        }
         }
 
         // Remove configured filler words. An empty list is naturally a no-op.
