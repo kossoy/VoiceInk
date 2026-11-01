@@ -6,6 +6,11 @@ name: oklabs-release
 on:
   push:
     branches: [main]
+    # Docs and sync-tooling commits need no new build.
+    paths-ignore:
+      - '**/*.md'
+      - '.github/workflows/oklabs-sync.yml'
+      - '.oklabs/ci/sync.sh'
   workflow_dispatch:
 
 permissions:
