@@ -44,7 +44,6 @@ run_logged archive xcodebuild archive \
     CODE_SIGN_STYLE=Manual \
     DEVELOPMENT_TEAM="$TEAM_ID" \
     CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
-    "CODE_SIGN_IDENTITY[sdk=macosx*]=$SIGN_IDENTITY" \
     PROVISIONING_PROFILE_SPECIFIER= \
     CODE_SIGN_ENTITLEMENTS="$ROOT/VoiceInk/VoiceInk.local.entitlements" \
     'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) LOCAL_BUILD OKLABS' \

@@ -65,9 +65,11 @@ jobs:
             echo "UPSTREAM_SHA=${UPSTREAM_SHA}"
           } | tee -a "$GITHUB_ENV"
 
-      - name: Cache whisper.xcframework
+      # Caches are restored and saved explicitly so a later failing step does not
+      # throw away a finished whisper build or package checkout.
+      - name: Restore whisper.xcframework
         id: whisper-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/VoiceInk-Dependencies
           key: whisper-${{ env.WHISPER_TAG }}-xcode26.6-${{ hashFiles('.oklabs/build-whisper.sh', '.oklabs/ci/whisper_macos_only.py') }}
@@ -75,12 +77,33 @@ jobs:
       - name: Build whisper.xcframework (macOS slice)
         run: bash .oklabs/build-whisper.sh
 
-      - name: Cache Swift packages
-        uses: actions/cache@v4
+      - name: Save whisper.xcframework
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/VoiceInk-Dependencies
+          key: ${{ steps.whisper-cache.outputs.cache-primary-key }}
+
+      - name: Restore Swift packages
+        id: spm-cache
+        uses: actions/cache/restore@v4
         with:
           path: .build/SourcePackages
           key: spm-${{ hashFiles('VoiceInk.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies -project VoiceInk.xcodeproj -scheme VoiceInk \
+            -clonedSourcePackagesDirPath .build/SourcePackages -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackagePluginValidation -skipMacroValidation | tail -40
+
+      - name: Save Swift packages
+        if: steps.spm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build/SourcePackages
+          key: ${{ steps.spm-cache.outputs.cache-primary-key }}
 
       - name: Signing keychain
         env:
