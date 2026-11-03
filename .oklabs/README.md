@@ -11,7 +11,7 @@ managed mode, Developer ID builds on GitHub Actions, and no Sparkle.
 | `VoiceInk/OKLabs/ScribeCore/` | Scribe engine, Foundation only: framing, segmenter, commit ledger, keyterms, URL/wire format, `ScribeLiveSession` |
 | `VoiceInk/OKLabs/*.swift` | app side: `ScribeRealtimeProvider`, `ManagedSettings`, `FailureNotice`, `OKLabsSettings`, keyterms file |
 | `#if OKLABS` hooks in upstream files | `UpdaterViewModel`, `VoiceInk.swift`, `ElevenLabsProvider`, `CustomVocabularyService`, `StreamingTranscriptionService`, `TranscriptionSession`, `TranscriptionPipeline`, `TranscriptionOutputFilter`, `CursorPaster`, `AudioFileTranscriptionService`, `AudioFileTranscriptionManager` |
-| `Package.swift`, `Tests/ScribeCoreTests`, `Tests/ScribeBenchKitTests` | `swift test`: unit tests and live-session scenarios against a scripted WebSocket server |
+| `Package.swift`, `Tests/ScribeCoreTests`, `Tests/ScribeBenchKitTests`, `Tests/OKLabsVocabularyTests` | `swift test`: unit tests, mock WebSocket scenarios, and the production vocabulary-correction opt-out regression |
 | `.oklabs/scribe-bench/` | `scribe-bench`, the real-voice harness (aggregate numbers only) |
 | `.oklabs/ci/` | keychain, archive, notarize, package, bench, sync and Telegram notify scripts |
 | `.github/workflows/oklabs-*.yml` | `oklabs-test`, `oklabs-release`, `oklabs-sync` |
@@ -35,6 +35,9 @@ Branches: `upstream` mirrors Beingpax `main`; `main` = `upstream` + the OKLabs c
   macros run natively on the host. App and XPC binaries must each contain only arm64.
   Intel runners smoke-test a separate native `scribe-bench --help` executable; the published
   harness remains arm64.
+  Keep the input file before the variadic architecture list: `lipo "$binary" -verify_arch arm64`.
+  Release version metadata is read from the unique app Release configuration, independently of
+  project-file key order.
 - **Sync** (`oklabs-sync.yml`, nightly 01:17 UTC or manual): fetches Beingpax `main`; if it moved,
   rebases the OKLabs commits onto it and pushes `upstream` and `main` atomically with
   `--force-with-lease`, using the `OKLABS_SYNC_TOKEN` secret (a token with the `workflow` scope;
