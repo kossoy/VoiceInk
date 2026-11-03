@@ -74,9 +74,14 @@ jobs:
       - name: Version
         run: |
           PBX=VoiceInk.xcodeproj/project.pbxproj
-          # The app target's Release block: MARKETING_VERSION sits right above its bundle id line.
-          MV="$(grep -B1 'PRODUCT_BUNDLE_IDENTIFIER = com.prakashjoshipax.VoiceInk;' "$PBX" | sed -n 's/.*MARKETING_VERSION = \(.*\);/\1/p' | head -1)"
-          UB="$(awk '/PRODUCT_BUNDLE_IDENTIFIER = com.prakashjoshipax.VoiceInk;/ {print last} /CURRENT_PROJECT_VERSION = / {last=$3}' "$PBX" | tr -d ';' | head -1)"
+          # Read the app's Release settings without depending on project-file key order.
+          RELEASE_CONFIG="$(plutil -convert json -o - "$PBX" | jq -ce '
+            [.objects[] | select(.isa == "XCBuildConfiguration" and .name == "Release")
+             | .buildSettings | select(.PRODUCT_BUNDLE_IDENTIFIER == "com.prakashjoshipax.VoiceInk")]
+            | if length == 1 then .[0] else error("expected exactly one VoiceInk Release configuration") end
+          ')"
+          MV="$(jq -er '.MARKETING_VERSION' <<<"$RELEASE_CONFIG")"
+          UB="$(jq -er '.CURRENT_PROJECT_VERSION' <<<"$RELEASE_CONFIG")"
           [ -n "$MV" ] && [ -n "$UB" ] || { echo "cannot read upstream version"; exit 1; }
           SHA7="${GITHUB_SHA::7}"
           STAMP="$(date -u +%Y%m%d%H%M)"
