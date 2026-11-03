@@ -149,7 +149,7 @@ if plutil -extract SUFeedURL raw "$INFO" >/dev/null 2>&1 || plutil -extract SUPu
     echo "error: Sparkle feed/key still present in the shipped Info.plist" >&2; exit 1
 fi
 for binary in "$APP/Contents/MacOS/VoiceInk" "$APP/Contents/XPCServices/VoiceInkRefineXPC.xpc/Contents/MacOS/VoiceInkRefineXPC"; do
-    lipo -verify_arch arm64 "$binary"
+    lipo "$binary" -verify_arch arm64
     [[ "$(lipo -archs "$binary")" == arm64 ]] || { echo "error: expected an arm64-only product: $binary" >&2; exit 1; }
 done
 lipo -archs "$APP/Contents/MacOS/VoiceInk"

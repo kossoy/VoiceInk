@@ -16,7 +16,7 @@ cd "$ROOT"
 swift build -c release --product scribe-bench --arch arm64 2>&1 | tail -20
 BIN="$(swift build -c release --product scribe-bench --arch arm64 --show-bin-path)/scribe-bench"
 [[ -x "$BIN" ]] || { echo "error: scribe-bench binary missing" >&2; exit 1; }
-lipo -verify_arch arm64 "$BIN"
+lipo "$BIN" -verify_arch arm64
 cp "$BIN" "$WORK/pkg/scribe-bench"
 
 codesign --force --options runtime --timestamp --keychain "$KC" \
@@ -35,7 +35,7 @@ if [[ "$HOST_ARCH" != arm64 ]]; then
     swift build -c release --product scribe-bench --arch "$HOST_ARCH" 2>&1 | tail -20
     SMOKE_BIN="$(swift build -c release --product scribe-bench --arch "$HOST_ARCH" --show-bin-path)/scribe-bench"
     [[ -x "$SMOKE_BIN" ]] || { echo "error: native scribe-bench binary missing" >&2; exit 1; }
-    lipo -verify_arch "$HOST_ARCH" "$SMOKE_BIN"
+    lipo "$SMOKE_BIN" -verify_arch "$HOST_ARCH"
     echo "Smoke test: native $HOST_ARCH helper (published artifact remains arm64)"
 else
     echo "Smoke test: published arm64 harness"
