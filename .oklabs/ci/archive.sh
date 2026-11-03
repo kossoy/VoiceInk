@@ -28,6 +28,7 @@ run_logged() {
     tail -5 "$LOG_DIR/$name.log"
 }
 
+# Only the app and XPC product targets consume this override; host macros stay native.
 run_logged archive xcodebuild archive \
     -project VoiceInk.xcodeproj \
     -scheme VoiceInk \
@@ -39,7 +40,7 @@ run_logged archive xcodebuild archive \
     -onlyUsePackageVersionsFromResolvedFile \
     -skipPackagePluginValidation \
     -skipMacroValidation \
-    ARCHS=arm64 \
+    OKLABS_PRODUCT_ARCHS=arm64 \
     ONLY_ACTIVE_ARCH=NO \
     CODE_SIGN_STYLE=Manual \
     DEVELOPMENT_TEAM="$TEAM_ID" \
@@ -147,6 +148,10 @@ INFO="$APP/Contents/Info.plist"
 if plutil -extract SUFeedURL raw "$INFO" >/dev/null 2>&1 || plutil -extract SUPublicEDKey raw "$INFO" >/dev/null 2>&1; then
     echo "error: Sparkle feed/key still present in the shipped Info.plist" >&2; exit 1
 fi
+for binary in "$APP/Contents/MacOS/VoiceInk" "$APP/Contents/XPCServices/VoiceInkRefineXPC.xpc/Contents/MacOS/VoiceInkRefineXPC"; do
+    lipo -verify_arch arm64 "$binary"
+    [[ "$(lipo -archs "$binary")" == arm64 ]] || { echo "error: expected an arm64-only product: $binary" >&2; exit 1; }
+done
 lipo -archs "$APP/Contents/MacOS/VoiceInk"
 
 echo "APP=$APP" >> "$GITHUB_ENV"
