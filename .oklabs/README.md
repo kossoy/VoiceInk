@@ -158,6 +158,11 @@ Keychain (service `com.prakashjoshipax.VoiceInk.Local`, account `elevenLabsAPIKe
 written to `LocalKeychain_elevenLabsAPIKey` is moved there on first use. The build ships no
 keyterms.
 
+Upstream removed the vocabulary-correction toggle in November 2026. The fork keeps
+`IsAutomaticVocabularyCorrectionEnabled` as an explicit opt-in: unset or `false`
+preserves verbatim text; `true` enables the upstream phonetic matcher. This applies
+to live dictation, file transcription and history retranscription.
+
 ## Scribe engine behaviour
 
 100 ms frames; the client commits at the first 0.3 s pause after 30 s and always by 34 s, so the
