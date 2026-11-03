@@ -58,7 +58,7 @@ jobs:
     name: compile app (unsigned, LOCAL_BUILD OKLABS)
     # Release builds on main archive the app anyway; compile-check feature branches only.
     if: github.ref != 'refs/heads/main' || inputs.compile_app
-    runs-on: macos-26-intel
+    runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
