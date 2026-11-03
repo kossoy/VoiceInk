@@ -21,15 +21,17 @@ Branches: `upstream` mirrors Beingpax `main`; `main` = `upstream` + the OKLabs c
 ## Flows
 
 - **Test** (`oklabs-test.yml`, every push to a branch other than `main`/`upstream`): `swift test`
-  and an unsigned app compile with `LOCAL_BUILD OKLABS`.
+  and an unsigned arm64 app compile with `LOCAL_BUILD OKLABS` on standard `macos-26-intel` runners.
 - **Release** (`oklabs-release.yml`, push to `main` or manual; a push that touches only docs,
   `oklabs-sync.yml`, `sync.sh` or `notify.sh` does not release): runs the tests, then on a
-  GitHub-hosted `macos-26` runner builds whisper.cpp (pinned tag, macOS slice), archives with
+  standard GitHub-hosted `macos-26-intel` runner builds whisper.cpp (pinned tag, macOS slice), archives with
   `LOCAL_BUILD OKLABS` and the local entitlements, exports with Developer ID, checks every nested
-  signature, notarizes and staples the app and the DMG, signs and notarizes `scribe-bench`, and
+  signature, notarizes and staples the app and the DMG, signs and notarizes arm64 `scribe-bench`, and
   publishes `oklabs-<upstream version>-<run>` as the latest release with `VoiceInk-oklabs.zip`,
   `VoiceInk-oklabs.dmg`, `scribe-bench-macos-arm64.zip` and `SHA256SUMS`. Version:
   `<upstream>+oklabs.<UTC yyyymmddHHMM>.<sha7>`, build `<upstream build>.<run>`.
+  Intel runners execute a separate native `scribe-bench --help` smoke test; the published app
+  and harness remain arm64.
 - **Sync** (`oklabs-sync.yml`, nightly 01:17 UTC or manual): fetches Beingpax `main`; if it moved,
   rebases the OKLabs commits onto it and pushes `upstream` and `main` atomically with
   `--force-with-lease`, using the `OKLABS_SYNC_TOKEN` secret (a token with the `workflow` scope;
