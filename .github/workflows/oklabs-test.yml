@@ -58,7 +58,7 @@ jobs:
     name: compile app (unsigned, LOCAL_BUILD OKLABS)
     # Release builds on main archive the app anyway; compile-check feature branches only.
     if: github.ref != 'refs/heads/main' || inputs.compile_app
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -84,13 +84,14 @@ jobs:
           set -o pipefail
           plutil -remove SUFeedURL VoiceInk/Info.plist
           plutil -remove SUPublicEDKey VoiceInk/Info.plist
+          # Scope arm64 to app/XPC targets; Swift package macros must use the runner architecture.
           xcodebuild build \
             -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Release \
             -destination 'generic/platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/dd" \
             -clonedSourcePackagesDirPath .build/SourcePackages \
             -onlyUsePackageVersionsFromResolvedFile -skipPackagePluginValidation -skipMacroValidation \
-            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            OKLABS_PRODUCT_ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
             CODE_SIGN_ENTITLEMENTS="$PWD/VoiceInk/VoiceInk.local.entitlements" \
             'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) LOCAL_BUILD OKLABS' \
@@ -101,3 +102,8 @@ jobs:
             }
           grep -E 'warning: .*/OKLabs/|warning: .*(TranscriptionPipeline|TranscriptionSession|StreamingTranscriptionService|CursorPaster|ElevenLabsProvider|CustomVocabularyService|TranscriptionOutputFilter|VoiceInk\.swift)' "$RUNNER_TEMP/build.log" | sort -u | head -40 || true
           tail -3 "$RUNNER_TEMP/build.log"
+          APP="$RUNNER_TEMP/dd/Build/Products/Release/VoiceInk.app"
+          for binary in "$APP/Contents/MacOS/VoiceInk" "$APP/Contents/XPCServices/VoiceInkRefineXPC.xpc/Contents/MacOS/VoiceInkRefineXPC"; do
+            lipo "$binary" -verify_arch arm64
+            [[ "$(lipo -archs "$binary")" == arm64 ]] || { echo "error: expected an arm64-only product: $binary" >&2; exit 1; }
+          done
