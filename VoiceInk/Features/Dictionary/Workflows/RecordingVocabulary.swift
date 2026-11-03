@@ -38,6 +38,10 @@ struct RecordingVocabulary: Sendable {
     /// Correct the final model output off the main actor using this run's prepared terms.
     func correctTranscription(_ text: String) async throws -> String {
         try Task.checkCancellation()
+        #if OKLABS
+        // Upstream removed its toggle; retain the fork's verbatim-output default.
+        guard OKLabsSettings.appliesVocabularyCorrection else { return text }
+        #endif
         guard !terms.isEmpty, !text.isEmpty else { return text }
         let vocabulary = terms
         let correction = Task.detached(priority: .userInitiated) {

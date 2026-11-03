@@ -31,7 +31,6 @@ enum ManagedSettings {
     static func registerForkDefaults(_ defaults: UserDefaults) {
         OKLabsSettings.registerDefaults(defaults)
         defaults.register(defaults: [
-            VocabularyCorrectionSettings.isEnabledKey: false,
             AutoLearnSettings.isEnabledKey: false,
             "VoiceInkChecksForUpdatesOnLaunch": false,
             "enableAnnouncements": false,

@@ -1,7 +1,7 @@
 import Foundation
 
 /// OKLabs fork settings. Every key is a plain UserDefaults key, so
-/// `defaults write com.prakashjoshipax.VoiceInk oklabs.<key> ...` configures it.
+/// `defaults write com.prakashjoshipax.VoiceInk <key> ...` configures it.
 enum OKLabsSettings {
     enum Key {
         /// `oklabs` (default): the fork's Scribe engine. `upstream`: LLMkit's client.
@@ -14,6 +14,8 @@ enum OKLabsSettings {
         static let stripBracketedText = "oklabs.stripBracketedText"
         /// Apply Dictionary → Word Replacements (upstream always does). Default off.
         static let applyWordReplacements = "oklabs.applyWordReplacements"
+        /// Keep the pre-sync key so explicit vocabulary-correction preferences survive. Default off.
+        static let automaticVocabularyCorrection = "IsAutomaticVocabularyCorrectionEnabled"
         /// Delay before paste, ms, clamped to 0-500. Default 200 (upstream's fixed value).
         static let prePasteDelayMs = "oklabs.prePasteDelayMs"
         /// When true, the managed "Scribe" mode is restored on every launch.
@@ -29,6 +31,7 @@ enum OKLabsSettings {
             Key.scribeEngine: "oklabs",
             Key.stripBracketedText: false,
             Key.applyWordReplacements: false,
+            Key.automaticVocabularyCorrection: false,
             Key.prePasteDelayMs: defaultPrePasteDelayMs,
             Key.managedMode: false,
             Key.notifyOnFailure: true,
@@ -68,6 +71,14 @@ enum OKLabsSettings {
     static var appliesWordReplacements: Bool {
         #if OKLABS
         return UserDefaults.standard.bool(forKey: Key.applyWordReplacements)
+        #else
+        return true
+        #endif
+    }
+
+    static var appliesVocabularyCorrection: Bool {
+        #if OKLABS
+        return UserDefaults.standard.bool(forKey: Key.automaticVocabularyCorrection)
         #else
         return true
         #endif
