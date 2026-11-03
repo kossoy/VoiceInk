@@ -21,7 +21,9 @@ Branches: `upstream` mirrors Beingpax `main`; `main` = `upstream` + the OKLabs c
 ## Flows
 
 - **Test** (`oklabs-test.yml`, every push to a branch other than `main`/`upstream`): `swift test`
-  and an unsigned app compile with `LOCAL_BUILD OKLABS`.
+  on standard `macos-26-intel` runners, and an unsigned arm64 app compile with
+  `LOCAL_BUILD OKLABS` on native `macos-26` runners. App builds and signed releases
+  stay on ARM so Swift macros execute with their host architecture.
 - **Release** (`oklabs-release.yml`, push to `main` or manual; a push that touches only docs,
   `oklabs-sync.yml`, `sync.sh` or `notify.sh` does not release): runs the tests, then on a
   GitHub-hosted `macos-26` runner builds whisper.cpp (pinned tag, macOS slice), archives with
