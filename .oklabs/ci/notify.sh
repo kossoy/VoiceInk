@@ -10,7 +10,7 @@
 #   release-ok   after a published release: version, what changed, the Mac update
 #                command. On a push whose app code and build inputs are unchanged since
 #                the previous release (CI, docs, tests or bench only) nothing is sent.
-#   sync-failed  oklabs-sync failed or was cancelled: a rebase conflict (read from
+#   sync-failed  oklabs-sync failed or was cancelled: a merge conflict (read from
 #                $SYNC_RESULT, which sync.sh writes) or any other failure, with the run URL.
 #   test         the release-ok text for the current latest release, marked [TEST].
 #                The only kind that exits 1 when the message was not delivered.
@@ -149,7 +149,7 @@ changes() { # new-commit new-upstream-base prev-tag -> one plain-text line
         fi
     fi
     # Fork commits touching the app that the previous release did not have. Compared by
-    # subject, because the nightly rebase rewrites every fork commit.
+    # subject, to remain compatible with older releases whose commits were rebased.
     old="$(mktemp)"
     if [ -n "$prev_up" ]; then git log --format=%s "$prev_up..$prev_sha" -- . "${NON_APP[@]}" >"$old" 2>/dev/null; fi
     s="$(git log --format=%s "$up..$new" -- . "${NON_APP[@]}" 2>/dev/null | grep -vxF -f "$old" | subjects 3)"
@@ -198,14 +198,13 @@ release_ok() {
 }
 
 sync_failed() {
-    local f="${SYNC_RESULT:-}" k v result="" stopped="" subject="" base="" error="" files="" n=0 dry="" text
+    local f="${SYNC_RESULT:-}" k v result="" upstream="" subject="" error="" files="" n=0 dry="" text
     if [ -n "$f" ] && [ -f "$f" ]; then
         while IFS='=' read -r k v; do
             case $k in
                 result) result=$v ;;
-                stopped) stopped=$v ;;
+                upstream) upstream=$v ;;
                 subject) subject=$v ;;
-                base) base=$v ;;
                 error) error=$v ;;
                 conflict)
                     n=$((n + 1))
@@ -221,11 +220,14 @@ sync_failed() {
     fi
     if [ "$result" = conflict ]; then
         text="<b>${LABEL:+[$LABEL] }VoiceInk sync$dry: конфликт с upstream</b>
-Rebase OKLabs commits на Beingpax main остановился на <code>$(esc "$stopped")</code> $(esc "$(cut_to "$subject" 90)")
+Merge Beingpax main <code>$(esc "${upstream:0:10}")</code> $(esc "$(cut_to "$subject" 90)") требует разрешения конфликта.
 Файлы: ${files:-не определены, см. run}
 Ничего не pushed, latest release прежний.
 Fix локально (.oklabs/README.md, раздел Sync):
-<pre>git fetch upstream &amp;&amp; git rebase --onto upstream/main $(esc "$base") main</pre>
+<pre>git fetch origin &amp;&amp; git fetch upstream
+git switch -c fix/upstream-sync origin/main
+git merge upstream/main</pre>
+После разрешения конфликта — PR с merge commit (без squash/rebase).
 Run: <a href=\"$RUN_URL\">$RUN_URL</a>"
     else
         text="<b>${LABEL:+[$LABEL] }VoiceInk sync$dry упал</b>

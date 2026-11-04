@@ -16,11 +16,12 @@ managed mode, Developer ID builds on GitHub Actions, and no Sparkle.
 | `.oklabs/ci/` | keychain, archive, notarize, package, bench, sync and Telegram notify scripts |
 | `.github/workflows/oklabs-*.yml` | `oklabs-test`, `oklabs-release`, `oklabs-sync` |
 
-Branches: `upstream` mirrors Beingpax `main`; `main` = `upstream` + the OKLabs commits.
+Branches: `upstream` mirrors Beingpax `main`; `main` preserves OKLabs history and merges upstream updates.
 
 ## Flows
 
-- **Test** (`oklabs-test.yml`, every push to a branch other than `main`/`upstream`): `swift test`
+- **Test** (`oklabs-test.yml`, every push to a branch other than `main`/`upstream`): local-Git sync
+  regression scenarios on Linux, `swift test`
   and an unsigned arm64 app compile with `LOCAL_BUILD OKLABS` on standard `macos-26-intel` runners.
 - **Release** (`oklabs-release.yml`, push to `main` or manual; a push that touches only docs,
   `oklabs-sync.yml`, `sync.sh` or `notify.sh` does not release): runs the tests, then on a
@@ -33,21 +34,34 @@ Branches: `upstream` mirrors Beingpax `main`; `main` = `upstream` + the OKLabs c
   `OKLABS_PRODUCT_ARCHS=arm64` scopes the architecture override to the app and RefineXPC
   Release targets. Swift package dependencies retain their normal architectures, and build-time
   macros run natively on the host. App and XPC binaries must each contain only arm64.
+  Keep the custom architecture default next to `ARCHS`, away from upstream version metadata.
   Intel runners smoke-test a separate native `scribe-bench --help` executable; the published
   harness remains arm64.
   Keep the input file before the variadic architecture list: `lipo "$binary" -verify_arch arm64`.
   Release version metadata is read from the unique app Release configuration, independently of
   project-file key order.
 - **Sync** (`oklabs-sync.yml`, nightly 01:17 UTC or manual): fetches Beingpax `main`; if it moved,
-  rebases the OKLabs commits onto it and pushes `upstream` and `main` atomically with
-  `--force-with-lease`, using the `OKLABS_SYNC_TOKEN` secret (a token with the `workflow` scope;
-  `GITHUB_TOKEN` can neither push rewritten workflow files nor start other workflows). That push
-  starts a release. Unchanged upstream = no-op. **A rebase conflict aborts, pushes nothing and
-  fails the run**: the Actions tab shows it red, with the fork commit and files in the run
-  summary, Telegram gets the same details, and the last good release stays `latest`. Fix it locally:
-  `git fetch upstream && git rebase --onto upstream/main <base from the summary> main`, resolve,
-  `git push --force-with-lease origin main` and push the new `upstream`. Manual runs take
-  `dry_run` and a test-only `upstream_ref` (`owner/repo:ref`).
+  merges it into existing `main` and fast-forwards `upstream` and `main` atomically. Exact
+  `--force-with-lease` expectations reject concurrent changes, while explicit ancestry checks
+  prohibit history rewrites. The `OKLABS_SYNC_TOKEN` secret needs the `workflow` scope; unlike
+  `GITHUB_TOKEN`, its push starts a release. Unchanged upstream = no-op. Rewritten upstream
+  history is rejected for manual review. **A merge conflict aborts, pushes nothing and fails
+  the run**: the run summary and Telegram identify the incoming upstream commit and files;
+  the last good release stays `latest`. Manual runs take `dry_run` and a test-only
+  `upstream_ref` (`owner/repo:ref`).
+
+  Recover a real conflict on a branch from current `origin/main`: fetch both remotes, merge
+  `upstream/main`, resolve and validate, then open a PR. **Merge that PR with a merge commit**
+  so the upstream ancestry and conflict resolution are retained; do not squash or rebase it.
+  Run the sync workflow after the PR merge to fast-forward the `upstream` mirror if needed.
+  For correct release provenance when the recovery PR itself includes upstream app changes,
+  fast-forward the mirror to that exact upstream commit before merging the PR.
+
+  The previous rebase workflow replayed historical fork commits on every sync. A version bump
+  from 2.22 to 2.25 conflicted with an old architecture-setting insertion even after the fork's
+  current tree could merge cleanly. Merging preserves prior resolutions instead of replaying
+  those old patches. Run `bash .oklabs/ci/tests/sync.sh` for offline tests of repeated version
+  bumps, no-op/dry-run behavior, real conflicts, rewritten upstream and atomic race rejection.
 - **Update on the Mac**: Sparkle is off (`UpdaterViewModel.isSparkleDisabled`, and CI strips
   `SUFeedURL`/`SUPublicEDKey`), so upstream can never replace the fork build. Updates come from
   `releases/latest` through the command below.
@@ -62,7 +76,7 @@ message that cannot be delivered is a warning in the log and never fails a job.
 |---|---|
 | `oklabs-release` published a build | «Новая сборка VoiceInk `<version>`», one line on what changed since the previous release on another commit (upstream +N commits with their subjects, new fork commits, changed build inputs), the update command below, the release link. Sent even if the download check after publish failed, with a line saying so |
 | any `oklabs-release` job failed or was cancelled | «VoiceInk release упал», the job results, the run URL |
-| `oklabs-sync` rebase conflict | «VoiceInk sync: конфликт с upstream», the fork commit, the conflicting files, the rebase command, the run URL |
+| `oklabs-sync` merge conflict | «VoiceInk sync: конфликт с upstream», the incoming upstream commit, conflicting files, merge recovery commands and the run URL |
 | any other `oklabs-sync` failure, timeout or cancel | «VoiceInk sync упал», the failing command or the cancel, the run URL (a fallback text if even the checkout failed) |
 | no-op night, clean sync, dry run without a conflict | nothing |
 

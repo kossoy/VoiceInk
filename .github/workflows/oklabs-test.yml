@@ -30,6 +30,15 @@ defaults:
     shell: bash
 
 jobs:
+  sync-test:
+    name: upstream sync regression tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Git sync scenarios
+        run: bash .oklabs/ci/tests/sync.sh
+
   swift-test:
     name: swift test (ScribeCore, mock WebSocket, harness)
     runs-on: macos-26-intel

@@ -1,8 +1,7 @@
 # OKLabs fork: nightly sync with Beingpax/VoiceInk (plan C.3).
-# Mirrors upstream main into `upstream`, rebases the OKLabs commits on `main`
-# onto it and pushes with OKLABS_SYNC_TOKEN, so the push starts oklabs-release.
-# GITHUB_TOKEN cannot push rewritten workflow files and its pushes start no
-# workflows. A rebase conflict fails the run and pushes nothing.
+# Merges upstream main into `main` and mirrors it into `upstream`, preserving
+# published history. OKLABS_SYNC_TOKEN pushes start oklabs-release; GITHUB_TOKEN
+# pushes cannot start workflows. A merge conflict fails the run and pushes nothing.
 # Telegram: a conflict or any other failure sends one message (.oklabs/ci/notify.sh);
 # a no-op night or a clean sync sends nothing (the release run reports the new build).
 name: oklabs-sync
@@ -13,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Rebase and report, push nothing
+        description: Merge and report, push nothing
         type: boolean
         default: false
       upstream_ref:
@@ -34,7 +33,7 @@ defaults:
 
 jobs:
   sync:
-    name: Rebase OKLabs commits onto upstream
+    name: Merge upstream into the OKLabs fork
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
