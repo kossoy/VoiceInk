@@ -1,6 +1,6 @@
 # OKLabs fork: nightly sync with Beingpax/VoiceInk (plan C.3).
-# Merges upstream main into `main` and mirrors it into `upstream`, preserving
-# published history. OKLABS_SYNC_TOKEN pushes start oklabs-release; GITHUB_TOKEN
+# Validates a candidate before promoting its exact SHA to main/upstream.
+# Published fork history is preserved. OKLABS_SYNC_TOKEN pushes start oklabs-release; GITHUB_TOKEN
 # pushes cannot start workflows. A merge conflict fails the run and pushes nothing.
 # Telegram: a conflict or any other failure sends one message (.oklabs/ci/notify.sh);
 # a no-op night or a clean sync sends nothing (the release run reports the new build).
@@ -32,22 +32,38 @@ defaults:
     shell: bash
 
 jobs:
-  sync:
-    name: Merge upstream into the OKLabs fork
+  prepare:
+    name: Prepare upstream candidate
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      changed: ${{ steps.prepare.outputs.changed }}
+      main: ${{ steps.prepare.outputs.main }}
+      old_upstream: ${{ steps.prepare.outputs.old_upstream }}
+      new_upstream: ${{ steps.prepare.outputs.new_upstream }}
+      candidate: ${{ steps.prepare.outputs.candidate }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
+          # This token also permits branch updates containing workflow files.
           token: ${{ secrets.OKLABS_SYNC_TOKEN }}
-      - name: Sync
+      - name: Preserve trusted scripts before the merge changes the worktree
+        run: |
+          cp .oklabs/ci/sync.sh "$RUNNER_TEMP/oklabs-sync.sh"
+          cp .oklabs/ci/notify.sh "$RUNNER_TEMP/oklabs-notify.sh"
+          cp .oklabs/ci/check-fork-contracts.py "$RUNNER_TEMP/check-fork-contracts.py"
+          cp .oklabs/ci/fork-contracts.json "$RUNNER_TEMP/fork-contracts.json"
+      - name: Prepare candidate
+        id: prepare
         env:
+          SYNC_PHASE: prepare
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           UPSTREAM_REF: ${{ inputs.upstream_ref || '' }}
           SYNC_RESULT: ${{ runner.temp }}/oklabs-sync.result
-        run: bash .oklabs/ci/sync.sh
+          SYNC_CONTRACT_GUARD: ${{ runner.temp }}/check-fork-contracts.py
+        run: bash "$RUNNER_TEMP/oklabs-sync.sh"
       # Never fails the job; also on a timeout or cancel. Without notify.sh the checkout
       # itself failed (for example an expired OKLABS_SYNC_TOKEN): a plain fallback text.
       - name: Telegram (conflict or failure)
@@ -61,9 +77,87 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           JOB_STATUS: ${{ job.status }}
         run: |
-          if [ -f .oklabs/ci/notify.sh ]; then exec bash .oklabs/ci/notify.sh sync-failed; fi
+          if [ -f "$RUNNER_TEMP/oklabs-notify.sh" ]; then exec bash "$RUNNER_TEMP/oklabs-notify.sh" sync-failed; fi
           [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] || { echo "::warning::Telegram secrets not set"; exit 0; }
-          TEXT="$(printf 'VoiceInk sync упал на checkout (OKLABS_SYNC_TOKEN?)\n%s' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
+          TEXT="$(printf 'VoiceInk sync упал на checkout/preparation\n%s' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
           curl -sS -m 20 --retry 3 --retry-delay 5 -o /dev/null -w 'Telegram: HTTP %{http_code}\n' \
             --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" --data-urlencode "text=$TEXT" \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" || true
+
+
+  contracts:
+    name: Preserve fork-owned code and hooks
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true' && inputs.dry_run != true
+    runs-on: ubuntu-latest
+    steps:
+      # Use the guard and manifest from the old trusted main, not from incoming code.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.main }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check fork contracts
+        env:
+          BASE: ${{ needs.prepare.outputs.main }}
+          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+        run: python3 .oklabs/ci/check-fork-contracts.py --base "$BASE" --candidate "$CANDIDATE"
+
+  validate:
+    name: Validate candidate
+    needs: [prepare, contracts]
+    uses: ./.github/workflows/oklabs-test.yml
+    with:
+      checkout_ref: ${{ needs.prepare.outputs.candidate }}
+      compile_app: true
+
+  promote:
+    name: Promote the checked candidate
+    needs: [prepare, validate]
+    if: needs.prepare.outputs.changed == 'true' && inputs.dry_run != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.main }}
+          fetch-depth: 0
+          token: ${{ secrets.OKLABS_SYNC_TOKEN }}
+      - name: Atomically update main and upstream
+        env:
+          SYNC_PHASE: promote
+          SYNC_EXPECTED_MAIN: ${{ needs.prepare.outputs.main }}
+          SYNC_EXPECTED_UPSTREAM: ${{ needs.prepare.outputs.old_upstream }}
+          SYNC_NEW_UPSTREAM: ${{ needs.prepare.outputs.new_upstream }}
+          SYNC_CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+        run: bash .oklabs/ci/sync.sh
+
+  validation-failure:
+    name: Report rejected candidate
+    needs: [prepare, contracts, validate, promote]
+    if: >-
+      always() && needs.prepare.result == 'success' &&
+      (needs.contracts.result == 'failure' || needs.validate.result == 'failure' ||
+       needs.promote.result == 'failure' || needs.contracts.result == 'cancelled' ||
+       needs.validate.result == 'cancelled' || needs.promote.result == 'cancelled')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.main }}
+          persist-credentials: false
+      - name: Report failure using the existing notification channel
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+          CONTRACTS: ${{ needs.contracts.result }}
+          VALIDATION: ${{ needs.validate.result }}
+          PROMOTION: ${{ needs.promote.result }}
+          SYNC_RESULT: ${{ runner.temp }}/oklabs-sync.result
+        run: |
+          printf 'result=error\nerror=Candidate %s rejected: contracts=%s, tests/build=%s, promotion=%s\n' \
+            "$CANDIDATE" "$CONTRACTS" "$VALIDATION" "$PROMOTION" > "$SYNC_RESULT"
+          bash .oklabs/ci/notify.sh sync-failed

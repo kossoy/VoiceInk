@@ -1,0 +1,28 @@
+{
+  "protected_paths": [
+    "VoiceInk/OKLabs/**",
+    ".oklabs/**",
+    ".github/workflows/**",
+    "Package.swift",
+    "Tests/**"
+  ],
+  "required_snippets": {
+    "VoiceInk/App/VoiceInk.swift": ["ManagedSettings.applyAtLaunch()", "MeetingCoordinator(", "MeetingWindowView()", "MeetingDetectionBridge(meeting: meetingCoordinator)"],
+    "VoiceInk/App/Updates/UpdaterViewModel.swift": ["#if !OKLABS"],
+    "VoiceInk/App/Windows/WindowManager.swift": ["static let meeting = \"meeting\""],
+    "VoiceInk/App/MenuBar/MenuBarView.swift": ["openWindow(id: AppWindowID.meeting)"],
+    "VoiceInk/App/Lifecycle/AppDelegate.swift": ["weak var meetingCoordinator: MeetingCoordinator?", "await meeting.stop()"],
+    "VoiceInk/Features/Recording/Workflows/VoiceInkEngine.swift": ["guard !isMeetingActive else"],
+    "VoiceInk/Infrastructure/Providers/Transcription/Cloud/ElevenLabsProvider.swift": ["ScribeRealtimeProvider(keyterms: vocabulary.terms)"],
+    "VoiceInk/Features/Recording/Workflows/TranscriptionSession.swift": ["OKLabsStreamingPolicy.skipsBatchFallback(error)"],
+    "VoiceInk/Features/Recording/Streaming/StreamingTranscriptionService.swift": ["let fallsBackOnDroppedAudio = true"],
+    "VoiceInk/Features/Recording/Processing/TranscriptionOutputFilter.swift": ["if OKLabsSettings.stripsBracketedText"],
+    "VoiceInk/Features/Recording/Workflows/TranscriptionPipeline.swift": ["if OKLabsSettings.appliesWordReplacements", "FailureNotice.show("],
+    "VoiceInk/Features/History/Workflows/AudioFileTranscriptionService.swift": ["if OKLabsSettings.appliesWordReplacements"],
+    "VoiceInk/Features/AudioImport/Workflows/AudioFileTranscriptionManager.swift": ["if OKLabsSettings.appliesWordReplacements"],
+    "VoiceInk/Features/Dictionary/Workflows/CustomVocabularyService.swift": ["OKLabsKeytermsFile.terms()"],
+    "VoiceInk/Features/Dictionary/Workflows/RecordingVocabulary.swift": ["guard OKLabsSettings.appliesVocabularyCorrection else { return text }"],
+    "VoiceInk/Infrastructure/SystemIntegration/Paste/CursorPaster.swift": ["OKLabsSettings.prePasteDelay"],
+    "VoiceInk.xcodeproj/project.pbxproj": ["PRODUCT_BUNDLE_IDENTIFIER = com.prakashjoshipax.VoiceInk;", "ARCHS = \"$(OKLABS_PRODUCT_ARCHS)\";"]
+  }
+}

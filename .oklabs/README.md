@@ -32,8 +32,8 @@ the output/DerivedData paths with `OKLABS_LOCAL_OUTPUT_DIR` and
 existing fork preferences, model directory and LOCAL_BUILD Keychain service are
 preserved. macOS may request permission once when switching from an ad-hoc build.
 
-- **Test** (`oklabs-test.yml`, every push to a branch other than `main`/`upstream`): local-Git sync
-  regression scenarios on Linux, `swift test`
+- **Test** (`oklabs-test.yml`, every push except `main`, `upstream` and the sync candidate): local-Git sync
+  and fork-contract regression scenarios on Linux, `swift test`
   and an unsigned arm64 app compile with `LOCAL_BUILD OKLABS` on standard `macos-26-intel` runners.
 - **Release** (`oklabs-release.yml`, push to `main` or manual; a push that touches only docs,
   `oklabs-sync.yml`, `sync.sh` or `notify.sh` does not release): runs the tests, then on a
@@ -53,14 +53,30 @@ preserved. macOS may request permission once when switching from an ad-hoc build
   Release version metadata is read from the unique app Release configuration, independently of
   project-file key order.
 - **Sync** (`oklabs-sync.yml`, nightly 01:17 UTC or manual): fetches Beingpax `main`; if it moved,
-  merges it into existing `main` and fast-forwards `upstream` and `main` atomically. Exact
-  `--force-with-lease` expectations reject concurrent changes, while explicit ancestry checks
-  prohibit history rewrites. The `OKLABS_SYNC_TOKEN` secret needs the `workflow` scope; unlike
-  `GITHUB_TOKEN`, its push starts a release. Unchanged upstream = no-op. Rewritten upstream
+  merges it with existing fork history and pushes **only `oklabs/upstream-sync`**. Before touching
+  `main` or the `upstream` mirror, it checks fork contracts, runs the regression and Swift tests,
+  and compiles the actual app. Only the exact tested candidate SHA can then advance `upstream`
+  and `main` atomically. Exact `--force-with-lease` expectations reject concurrent changes,
+  while explicit ancestry checks prohibit history rewrites. If `main` moves while checks run,
+  promotion fails and the next run must prepare a fresh candidate.
+
+  The guard script and manifest come from the pre-merge fork `main`, so incoming code cannot
+  remove its own checks. It rejects changes to `VoiceInk/OKLabs/`, `.oklabs/`, fork workflows,
+  `Package.swift` and `Tests/`, and checks the app hooks for Meeting mode, the ElevenLabs engine,
+  vocabulary, verbatim output and the disabled upstream updater. Structural checks complement
+  compiled tests; they do not prove runtime compatibility. Real Teams capture, speaker labels
+  and macOS permissions still need a meeting smoke test after meaningful app changes.
+
+  The guard also runs from a trusted pre-merge copy before the candidate push, rejecting all
+  workflow additions or edits before they can run. Preparation and promotion use the existing
+  `OKLABS_SYNC_TOKEN` (with the `workflow` scope); its `main` push starts a release.
+  Candidate tests and app compile receive no signing or promotion secrets.
+  Unchanged upstream = no-op. Rewritten upstream
   history is rejected for manual review. **A merge conflict aborts, pushes nothing and fails
-  the run**: the run summary and Telegram identify the incoming upstream commit and files;
-  the last good release stays `latest`. Manual runs take `dry_run` and a test-only
-  `upstream_ref` (`owner/repo:ref`).
+  the run**. Failed contracts, tests or build leave `main` and the mirror untouched; the rejected
+  candidate, if already pushed, remains available for investigation. The run summary and Telegram report failures;
+  the last good release stays `latest`. Manual runs take `dry_run` (merge preview without
+  pushing or running candidate validation) and a test-only `upstream_ref` (`owner/repo:ref`).
 
   Recover a real conflict on a branch from current `origin/main`: fetch both remotes, merge
   `upstream/main`, resolve and validate, then open a PR. **Merge that PR with a merge commit**
@@ -73,7 +89,9 @@ preserved. macOS may request permission once when switching from an ad-hoc build
   from 2.22 to 2.25 conflicted with an old architecture-setting insertion even after the fork's
   current tree could merge cleanly. Merging preserves prior resolutions instead of replaying
   those old patches. Run `bash .oklabs/ci/tests/sync.sh` for offline tests of repeated version
-  bumps, no-op/dry-run behavior, real conflicts, rewritten upstream and atomic race rejection.
+  bumps, no-op/dry-run behavior, real conflicts, rewritten upstream, prepare/promotion isolation
+  and atomic race rejection. Run `python3 -m unittest discover -s .oklabs/ci/tests -p 'test_*.py' -v`
+  for fork-contract regressions, including clean-but-incompatible merges and renamed fork files.
 - **Update on the Mac**: Sparkle is excluded from the OKLabs updater (`UpdaterViewModel.isSparkleDisabled`, and CI strips
   `SUFeedURL`/`SUPublicEDKey`), so upstream can never replace the fork build. Updates come from
   `releases/latest` through the command below.

@@ -64,9 +64,22 @@ OKLABS_PRODUCT_ARCHS = "$(ARCHS_STANDARD)";
     replace_version "$SOURCE" 2.25
     NEW_UPSTREAM="$(git -C "$SOURCE" rev-parse HEAD)"
 }
-sync_run() {
+prepare_run() {
     (cd "$WORK" && UPSTREAM_URL="$SOURCE" DRY_RUN="${1:-false}" \
+        SYNC_PHASE=prepare GITHUB_OUTPUT="$CASE/outputs" \
         GITHUB_STEP_SUMMARY="$CASE/summary" SYNC_RESULT="$CASE/result" bash "$SYNC") > "$CASE/output" 2>&1
+}
+output_value() { sed -n "s/^$1=//p" "$CASE/outputs" | tail -1; }
+promote_run() {
+    (cd "$WORK" && SYNC_PHASE=promote \
+        SYNC_EXPECTED_MAIN="$(output_value main)" SYNC_EXPECTED_UPSTREAM="$(output_value old_upstream)" \
+        SYNC_NEW_UPSTREAM="$(output_value new_upstream)" SYNC_CANDIDATE="$(output_value candidate)" \
+        GITHUB_STEP_SUMMARY="$CASE/summary" SYNC_RESULT="$CASE/result" bash "$SYNC") >> "$CASE/output" 2>&1
+}
+sync_run() {
+    : > "$CASE/outputs"
+    prepare_run "${1:-false}" || return 1
+    [[ "${1:-false}" == true || "$(output_value changed)" != true ]] || promote_run
 }
 refs_unchanged() {
     assert_equal "$(git --git-dir="$ORIGIN" rev-parse main)" "$OLD_MAIN" 'origin/main'
@@ -98,6 +111,9 @@ echo 'PASS: repeated version bumps, fork settings, published ancestry and no-op'
 fixture dry-run
 sync_run true || fail 'clean dry run failed'
 refs_unchanged
+if git --git-dir="$ORIGIN" show-ref --verify --quiet refs/heads/oklabs/upstream-sync; then
+    fail 'dry run pushed a candidate'
+fi
 grep -q 'clean merge.*dry run' "$CASE/summary" || fail 'dry run not reported'
 echo 'PASS: dry run changes no remote refs'
 
@@ -131,7 +147,11 @@ git -C "$WORK" config test.origin "$ORIGIN"
 git -C "$WORK" config test.race "$race_commit"
 cat > "$WORK/.git/hooks/pre-push" <<'HOOK'
 #!/bin/bash
-git --git-dir="$(git config test.origin)" update-ref refs/heads/main "$(git config test.race)"
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [[ "$remote_ref" == refs/heads/main ]]; then
+        git --git-dir="$(git config test.origin)" update-ref refs/heads/main "$(git config test.race)"
+    fi
+done
 HOOK
 chmod +x "$WORK/.git/hooks/pre-push"
 if sync_run; then fail 'concurrent main update was overwritten'; fi
@@ -139,3 +159,52 @@ assert_equal "$(git --git-dir="$ORIGIN" rev-parse main)" "$race_commit" 'concurr
 assert_equal "$(git --git-dir="$ORIGIN" rev-parse upstream)" "$OLD_UPSTREAM" 'atomic upstream after rejected push'
 grep -q 'push rejected' "$CASE/result" || fail 'race rejection not reported'
 echo 'PASS: a concurrent main update rejects the atomic push of both refs'
+
+fixture prepare-only
+prepare_run || { cat "$CASE/output"; fail 'candidate preparation failed'; }
+refs_unchanged
+assert_equal "$(git --git-dir="$ORIGIN" rev-parse refs/heads/oklabs/upstream-sync)" "$(output_value candidate)" 'candidate SHA'
+assert_equal "$(output_value changed)" true 'candidate requires validation'
+# A failing build/contract check must simply never call promote.
+refs_unchanged
+echo 'PASS: preparation and failing validation cannot change main or the upstream mirror'
+
+fixture rejected-contract
+cp "$ROOT/.oklabs/ci/check-fork-contracts.py" "$CASE/check-fork-contracts.py"
+cat > "$CASE/fork-contracts.json" <<'JSON'
+{"protected_paths": ["project.pbxproj"], "required_snippets": {}}
+JSON
+if SYNC_CONTRACT_GUARD="$CASE/check-fork-contracts.py" prepare_run; then
+    fail 'prepare ignored a rejected fork contract'
+fi
+refs_unchanged
+if git --git-dir="$ORIGIN" show-ref --verify --quiet refs/heads/oklabs/upstream-sync; then
+    fail 'rejected contract was pushed as a candidate'
+fi
+grep -q 'upstream changed fork-owned path: project.pbxproj' "$CASE/output" || fail 'contract error missing'
+echo 'PASS: trusted contract failure prevents even the candidate push'
+
+fixture stale-main
+prepare_run || fail 'prepare failed'
+race_commit="$(printf 'New main after checks\n' | git --git-dir="$ORIGIN" commit-tree "$OLD_MAIN^{tree}" -p "$OLD_MAIN")"
+git --git-dir="$ORIGIN" update-ref refs/heads/main "$race_commit"
+if promote_run; then fail 'promotion accepted a main that moved after checks'; fi
+assert_equal "$(git --git-dir="$ORIGIN" rev-parse main)" "$race_commit" 'new main preserved'
+assert_equal "$(git --git-dir="$ORIGIN" rev-parse upstream)" "$OLD_UPSTREAM" 'mirror preserved'
+grep -q 'main moved after validation' "$CASE/result" || fail 'stale validation was not reported'
+echo 'PASS: main advancing after checks invalidates the candidate'
+
+fixture stale-candidate
+prepare_run || fail 'prepare failed'
+git --git-dir="$ORIGIN" update-ref refs/heads/oklabs/upstream-sync "$OLD_MAIN"
+if promote_run; then fail 'promotion accepted an unchecked replacement candidate'; fi
+refs_unchanged
+grep -q 'candidate changed after validation' "$CASE/result" || fail 'changed candidate was not reported'
+echo 'PASS: only the exact checked candidate can be promoted'
+
+fixture missing-validation-inputs
+if (cd "$WORK" && SYNC_PHASE=promote SYNC_RESULT="$CASE/result" bash "$SYNC") > "$CASE/output" 2>&1; then
+    fail 'promotion accepted missing validation inputs'
+fi
+refs_unchanged
+echo 'PASS: promotion requires exact commit identities from validation'

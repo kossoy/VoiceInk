@@ -5,10 +5,14 @@ name: oklabs-test
 
 on:
   push:
-    branches-ignore: [main, upstream]
+    branches-ignore: [main, upstream, oklabs/upstream-sync]
   workflow_dispatch:
   workflow_call:
     inputs:
+      checkout_ref:
+        description: Exact upstream candidate SHA; defaults to the triggering commit
+        type: string
+        default: ''
       compile_app:
         type: boolean
         default: false
@@ -36,8 +40,13 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
       - name: Git sync scenarios
         run: bash .oklabs/ci/tests/sync.sh
+      - name: Fork guard regression tests
+        run: python3 -m unittest discover -s .oklabs/ci/tests -p 'test_*.py' -v
 
   swift-test:
     name: swift test (ScribeCore, mock WebSocket, harness)
@@ -45,6 +54,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
       - name: Toolchain
         run: |
           sw_vers
@@ -71,6 +83,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
       - name: Metal toolchain
         run: |
           if ! xcrun metal --version >/dev/null 2>&1; then xcodebuild -downloadComponent MetalToolchain; fi
