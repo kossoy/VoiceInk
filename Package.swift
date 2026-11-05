@@ -12,10 +12,15 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "ScribeCore", targets: ["ScribeCore"]),
+        .library(name: "MeetingCore", targets: ["MeetingCore"]),
         .executable(name: "scribe-bench", targets: ["ScribeBench"]),
+        .executable(name: "meeting-probe", targets: ["MeetingProbe"]),
     ],
     targets: [
         .target(name: "ScribeCore", path: "VoiceInk/OKLabs/ScribeCore"),
+        .target(name: "MeetingCore", path: "VoiceInk/OKLabs/MeetingCore"),
+        .executableTarget(name: "MeetingProbe", path: ".oklabs/meeting-probe"),
+        .testTarget(name: "MeetingCoreTests", dependencies: ["MeetingCore"], path: "Tests/MeetingCoreTests"),
         .target(
             name: "OKLabsVocabulary", path: "VoiceInk",
             sources: [
