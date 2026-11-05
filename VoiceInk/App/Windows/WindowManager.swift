@@ -8,6 +8,7 @@ enum AppWindowLayout {
 
 enum AppWindowID {
     static let main = "main"
+    static let meeting = "meeting"
 }
 
 enum WindowDiagnostics {

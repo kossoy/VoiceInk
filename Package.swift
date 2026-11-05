@@ -14,10 +14,21 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "ScribeCore", targets: ["ScribeCore"]),
+        .library(name: "MeetingCore", targets: ["MeetingCore"]),
         .executable(name: "scribe-bench", targets: ["ScribeBench"]),
+        .executable(name: "meeting-probe", targets: ["MeetingProbe"]),
     ],
     targets: [
         .target(name: "ScribeCore", path: "VoiceInk/OKLabs/ScribeCore"),
+        .target(name: "MeetingCore", path: "VoiceInk/OKLabs/MeetingCore"),
+        .target(name: "MeetingSystem", dependencies: ["MeetingCore"], path: "VoiceInk/OKLabs/MeetingSystem"),
+        .target(name: "MeetingCapture", dependencies: ["MeetingCore"], path: "VoiceInk/OKLabs/MeetingRuntime",
+                exclude: ["MeetingCoordinator.swift", "MeetingWindowView.swift", "MeetingPermissionView.swift", "MeetingDetector.swift"],
+                sources: ["MeetingAudioCapture.swift"]),
+        .testTarget(name: "MeetingCaptureTests", dependencies: ["MeetingCapture", "MeetingCore"], path: "Tests/MeetingCaptureTests"),
+        .testTarget(name: "MeetingSystemTests", dependencies: ["MeetingSystem", "MeetingCore"], path: "Tests/MeetingSystemTests"),
+        .executableTarget(name: "MeetingProbe", dependencies: ["MeetingSystem"], path: ".oklabs/meeting-probe"),
+        .testTarget(name: "MeetingCoreTests", dependencies: ["MeetingCore"], path: "Tests/MeetingCoreTests"),
         .target(
             name: "OKLabsUpdater", path: "VoiceInk",
             sources: [

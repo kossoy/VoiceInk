@@ -11,6 +11,7 @@ struct VoiceInkApp: App {
     let container: ModelContainer
 
     @StateObject private var engine: VoiceInkEngine
+    @StateObject private var meetingCoordinator: MeetingCoordinator
     // Retain managers without subscribing the entire scene to download progress.
     @State private var whisperModelManager: WhisperModelManager
     @State private var fluidAudioModelManager: FluidAudioModelManager
@@ -159,6 +160,11 @@ struct VoiceInkApp: App {
         _transcriptionModelManager = StateObject(wrappedValue: transcriptionModelManager)
         _recorderUIManager = StateObject(wrappedValue: recorderUIManager)
         _engine = StateObject(wrappedValue: engine)
+        let meetingCoordinator = MeetingCoordinator(
+            engine: engine, models: transcriptionModelManager,
+            registry: TranscriptionServiceRegistry(modelProvider: whisperModelManager,
+                modelsDirectory: modelsDirectory, modelContext: resolvedContainer.mainContext))
+        _meetingCoordinator = StateObject(wrappedValue: meetingCoordinator)
 
         // 7. Create other services that depend on engine
         let recordingShortcutManager = RecordingShortcutManager(engine: engine, recorderUIManager: recorderUIManager)
@@ -180,6 +186,7 @@ struct VoiceInkApp: App {
         _prewarmService = StateObject(wrappedValue: prewarmService)
 
         appDelegate.menuBarManager = menuBarManager
+        appDelegate.meetingCoordinator = meetingCoordinator
 
         // Ensure no lingering recording state from previous runs
         Task {
@@ -384,11 +391,19 @@ struct VoiceInkApp: App {
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            MeetingWindowCommands()
 
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updaterViewModel: updaterViewModel)
             }
         }
+
+        Window("Meeting Transcript", id: AppWindowID.meeting) {
+            MeetingWindowView()
+                .environmentObject(meetingCoordinator)
+                .environmentObject(transcriptionModelManager)
+        }
+        .defaultSize(width: 760, height: 720)
 
         MenuBarExtra(isInserted: $showMenuBarIcon) {
             MenuBarView()
@@ -413,6 +428,7 @@ struct VoiceInkApp: App {
 
             Image(nsImage: image)
                 .background(MainWindowRequestBridge(menuBarManager: menuBarManager))
+                .background(MeetingDetectionBridge(meeting: meetingCoordinator))
         }
         .menuBarExtraStyle(.menu)
 
