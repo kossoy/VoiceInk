@@ -1,3 +1,4 @@
+#if !OKLABS
 import Combine
 import Foundation
 import Sparkle
@@ -17,14 +18,6 @@ final class UpdaterViewModel: NSObject, ObservableObject, SPUUpdaterDelegate {
         static let sparkleAutomaticChecks = "SUEnableAutomaticChecks"
     }
 
-    #if OKLABS
-    /// OKLabs fork: Sparkle never starts and never contacts the upstream feed.
-    /// Updates come from kossoy/VoiceInk releases via `voiceink-oklabs-update`.
-    static let isSparkleDisabled = true
-    #else
-    static let isSparkleDisabled = false
-    #endif
-
     private let defaults: UserDefaults
     private var isUserInitiatedUpdateCheck = false
     private lazy var updaterController = SPUStandardUpdaterController(
@@ -40,11 +33,8 @@ final class UpdaterViewModel: NSObject, ObservableObject, SPUUpdaterDelegate {
     override init() {
         let defaults = UserDefaults.standard
         self.defaults = defaults
-        checksForUpdatesWhenDashboardAppears = Self.isSparkleDisabled
-            ? false
-            : Self.initialAutomaticCheckPreference(in: defaults)
+        checksForUpdatesWhenDashboardAppears = Self.initialAutomaticCheckPreference(in: defaults)
         super.init()
-        guard !Self.isSparkleDisabled else { return }
 
         let updater = updaterController.updater
 
@@ -73,7 +63,7 @@ final class UpdaterViewModel: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 
     func checkForUpdatesIfDue() {
-        guard !Self.isSparkleDisabled, checksForUpdatesWhenDashboardAppears else { return }
+        guard checksForUpdatesWhenDashboardAppears else { return }
 
         let updater = updaterController.updater
         guard !updater.sessionInProgress else { return }
@@ -87,7 +77,7 @@ final class UpdaterViewModel: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 
     func checkForUpdates() {
-        guard !Self.isSparkleDisabled, canCheckForUpdates else { return }
+        guard canCheckForUpdates else { return }
 
         // Any explicit check is interaction with the currently advertised update.
         // Persist it before presenting Sparkle so dismissing or closing the native
@@ -132,7 +122,6 @@ final class UpdaterViewModel: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 
     private func checkForUpdateInformationIfPossible() {
-        guard !Self.isSparkleDisabled else { return }
         let updater = updaterController.updater
         guard !updater.sessionInProgress else { return }
         updater.checkForUpdateInformation()
@@ -172,3 +161,4 @@ struct CheckForUpdatesView: View {
             .disabled(!updaterViewModel.canCheckForUpdates)
     }
 }
+#endif
