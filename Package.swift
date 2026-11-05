@@ -21,6 +21,9 @@ let package = Package(
     targets: [
         .target(name: "ScribeCore", path: "VoiceInk/OKLabs/ScribeCore"),
         .target(name: "MeetingCore", path: "VoiceInk/OKLabs/MeetingCore"),
+        .target(name: "MeetingCapture", dependencies: ["MeetingCore"], path: "VoiceInk/OKLabs/MeetingRuntime",
+                exclude: ["MeetingCoordinator.swift", "MeetingWindowView.swift"], sources: ["MeetingAudioCapture.swift"]),
+        .testTarget(name: "MeetingCaptureTests", dependencies: ["MeetingCapture", "MeetingCore"], path: "Tests/MeetingCaptureTests"),
         .executableTarget(name: "MeetingProbe", path: ".oklabs/meeting-probe"),
         .testTarget(name: "MeetingCoreTests", dependencies: ["MeetingCore"], path: "Tests/MeetingCoreTests"),
         .target(

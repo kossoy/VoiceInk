@@ -130,6 +130,11 @@ public struct MeetingSession: Codable, Equatable, Sendable, Identifiable {
         segments.filter(\.isFinal).sorted(by: Self.precedes)
     }
 
+    /// Lower bound for closing an interrupted capture without reusing a process's host clock.
+    public var latestActivityTime: TimeInterval {
+        max(lastControlTime, segments.map(\.range.end).max() ?? 0)
+    }
+
     public mutating func recordSpeakerCue(_ cue: MeetingSpeakerCue) throws {
         try validateSpeakerCue(cue)
         speakerCues.append(cue)

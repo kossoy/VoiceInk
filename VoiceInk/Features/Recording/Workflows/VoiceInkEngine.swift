@@ -83,6 +83,7 @@ private final class RealtimeAudioChunkGate: @unchecked Sendable {
 
 @MainActor
 class VoiceInkEngine: NSObject, ObservableObject {
+    @Published var isMeetingActive = false
     private enum RecordingUseCase {
         case newSession
         case assistantFollowUp
@@ -181,6 +182,11 @@ class VoiceInkEngine: NSObject, ObservableObject {
     // MARK: - Toggle Record
 
     func toggleRecord(modeId: UUID? = nil, isAssistantFollowUp: Bool = false, sendAfterPaste: Bool = false) async {
+        guard !isMeetingActive else {
+            NotificationManager.shared.showNotification(
+                title: "Stop the meeting and wait for its transcription queue before starting dictation.", type: .warning)
+            return
+        }
         if recordingState == .starting {
             await cancelRecording()
             return

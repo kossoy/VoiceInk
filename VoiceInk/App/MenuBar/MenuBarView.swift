@@ -47,6 +47,11 @@ struct MenuBarView: View {
                 recorderUIManager.handleToggleRecorderPanelNotification()
             }
 
+            Button("Meeting Transcript…") {
+                menuBarManager.activateForPresentedWindow()
+                openWindow(id: AppWindowID.meeting)
+            }
+
             Divider()
 
             Menu {

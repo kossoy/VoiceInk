@@ -4,6 +4,24 @@ import UniformTypeIdentifiers
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     weak var menuBarManager: MenuBarManager?
+    weak var meetingCoordinator: MeetingCoordinator?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let meeting = meetingCoordinator,
+              meeting.hasOpenCapture || meeting.isChangingCapture || meeting.isTranscribing else { return .terminateNow }
+        guard !meeting.isChangingCapture else { return .terminateCancel }
+        let alert = NSAlert()
+        alert.messageText = "Stop the meeting and quit VoiceInk?"
+        alert.informativeText = "Audio and transcript are saved locally. Any pending audio can be transcribed from Saved Meetings after restarting."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Stop and Quit")
+        guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+        Task { @MainActor in
+            await meeting.stop()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         menuBarManager?.applyActivationPolicy()
