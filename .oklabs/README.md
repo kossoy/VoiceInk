@@ -11,7 +11,7 @@ managed mode, Developer ID builds on GitHub Actions, and no Sparkle.
 | `VoiceInk/OKLabs/ScribeCore/` | Scribe engine, Foundation only: framing, segmenter, commit ledger, keyterms, URL/wire format, `ScribeLiveSession` |
 | `VoiceInk/OKLabs/*.swift` | app side: `ScribeRealtimeProvider`, `ManagedSettings`, `FailureNotice`, `OKLabsSettings`, keyterms file |
 | `#if OKLABS` hooks in upstream files | `UpdaterViewModel`, `VoiceInk.swift`, `ElevenLabsProvider`, `CustomVocabularyService`, `StreamingTranscriptionService`, `TranscriptionSession`, `TranscriptionPipeline`, `TranscriptionOutputFilter`, `CursorPaster`, `AudioFileTranscriptionService`, `AudioFileTranscriptionManager` |
-| `Package.swift`, `Tests/ScribeCoreTests`, `Tests/ScribeBenchKitTests`, `Tests/OKLabsVocabularyTests` | `swift test`: unit tests, mock WebSocket scenarios, and the production vocabulary-correction opt-out regression |
+| `Package.swift`, `Tests/ScribeCoreTests`, `Tests/ScribeBenchKitTests`, `Tests/OKLabsVocabularyTests`, `Tests/OKLabsUpdaterTests` | `swift test`: unit tests, mock WebSocket scenarios, and production vocabulary/updater fork regressions |
 | `.oklabs/scribe-bench/` | `scribe-bench`, the real-voice harness (aggregate numbers only) |
 | `.oklabs/ci/` | keychain, archive, notarize, package, bench, sync and Telegram notify scripts |
 | `.github/workflows/oklabs-*.yml` | `oklabs-test`, `oklabs-release`, `oklabs-sync` |
@@ -62,9 +62,17 @@ Branches: `upstream` mirrors Beingpax `main`; `main` preserves OKLabs history an
   current tree could merge cleanly. Merging preserves prior resolutions instead of replaying
   those old patches. Run `bash .oklabs/ci/tests/sync.sh` for offline tests of repeated version
   bumps, no-op/dry-run behavior, real conflicts, rewritten upstream and atomic race rejection.
-- **Update on the Mac**: Sparkle is off (`UpdaterViewModel.isSparkleDisabled`, and CI strips
+- **Update on the Mac**: Sparkle is excluded from the OKLabs updater (`UpdaterViewModel.isSparkleDisabled`, and CI strips
   `SUFeedURL`/`SUPublicEDKey`), so upstream can never replace the fork build. Updates come from
   `releases/latest` through the command below.
+
+  `VoiceInk/App/Updates/UpdaterViewModel.swift` retains the upstream implementation behind
+  `#if !OKLABS`. The fork uses `VoiceInk/OKLabs/OKLabsUpdaterViewModel.swift`, an inert adapter
+  with no Sparkle dependency or preference migration. This keeps upstream scheduler changes
+  out of the fork instead of inserting guards throughout changing upstream methods. The adapter
+  supports both the old Dashboard API and the automatic-check API introduced in upstream PR #1053.
+  `OKLabsUpdaterTests` compiles these production files without linking Sparkle and verifies that
+  existing automatic-check preferences and manual/scheduled actions cannot enable the updater.
 
 ## Notifications
 
