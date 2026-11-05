@@ -5,6 +5,8 @@
 // sources through VoiceInk.xcodeproj; this file does not affect that build.
 // OKLabsVocabulary also compiles the real app settings and correction path for
 // regression tests without building the full app or copying production sources.
+// OKLabsUpdater compiles the real fork adapter and its upstream compilation boundary
+// without a Sparkle dependency, so accidentally including the upstream updater fails.
 import PackageDescription
 
 let package = Package(
@@ -22,6 +24,13 @@ let package = Package(
         .executableTarget(name: "MeetingProbe", path: ".oklabs/meeting-probe"),
         .testTarget(name: "MeetingCoreTests", dependencies: ["MeetingCore"], path: "Tests/MeetingCoreTests"),
         .target(
+            name: "OKLabsUpdater", path: "VoiceInk",
+            sources: [
+                "OKLabs/OKLabsUpdaterViewModel.swift",
+                "App/Updates/UpdaterViewModel.swift",
+            ],
+            swiftSettings: [.define("OKLABS")]),
+        .target(
             name: "OKLabsVocabulary", path: "VoiceInk",
             sources: [
                 "OKLabs/OKLabsSettings.swift",
@@ -35,6 +44,9 @@ let package = Package(
             name: "ScribeBench", dependencies: ["ScribeBenchKit", "ScribeCore"],
             path: ".oklabs/scribe-bench/ScribeBench"),
         .testTarget(name: "ScribeCoreTests", dependencies: ["ScribeCore"], path: "Tests/ScribeCoreTests"),
+        .testTarget(
+            name: "OKLabsUpdaterTests", dependencies: ["OKLabsUpdater"],
+            path: "Tests/OKLabsUpdaterTests"),
         .testTarget(
             name: "OKLabsVocabularyTests", dependencies: ["OKLabsVocabulary"],
             path: "Tests/OKLabsVocabularyTests"),
