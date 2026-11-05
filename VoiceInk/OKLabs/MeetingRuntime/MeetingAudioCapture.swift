@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import CoreGraphics
 import ScreenCaptureKit
 #if SWIFT_PACKAGE
 import MeetingCore
@@ -7,6 +8,7 @@ import MeetingCore
 
 enum MeetingCaptureError: LocalizedError {
     case microphonePermission
+    case systemAudioPermission
     case noDisplay
     case invalidAudio
     case conversion(String)
@@ -14,6 +16,7 @@ enum MeetingCaptureError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .microphonePermission: return "Allow microphone access in System Settings → Privacy & Security → Microphone."
+        case .systemAudioPermission: return "Allow Screen & System Audio Recording access in Meeting settings, then reopen this app if macOS asks."
         case .noDisplay: return "No display is available for system audio capture."
         case .invalidAudio: return "The audio device returned an unsupported audio buffer."
         case .conversion(let message): return "Audio conversion failed: \(message)"
@@ -43,9 +46,8 @@ final class MeetingAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
 
     @MainActor
     func prepare() async throws {
-        let granted = await AVCaptureDevice.requestAccess(for: .audio)
-        guard granted else { throw MeetingCaptureError.microphonePermission }
-        // This prompts for Screen & System Audio Recording only after Start is pressed.
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { throw MeetingCaptureError.microphonePermission }
+        guard CGPreflightScreenCaptureAccess() else { throw MeetingCaptureError.systemAudioPermission }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first else { throw MeetingCaptureError.noDisplay }
         let filter = SCContentFilter(display: display, excludingWindows: [])

@@ -428,6 +428,7 @@ struct VoiceInkApp: App {
 
             Image(nsImage: image)
                 .background(MainWindowRequestBridge(menuBarManager: menuBarManager))
+                .background(MeetingDetectionBridge(meeting: meetingCoordinator))
         }
         .menuBarExtraStyle(.menu)
 

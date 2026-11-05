@@ -8,7 +8,11 @@ installed app and the main checkout are separate from this worktree.
 - Open **File → Meeting Transcript…**, or **Meeting Transcript…** in the menu bar.
 - Select an available model independently of dictation. Local models run on the
   Mac; cloud models send audio to the selected provider and can incur charges.
-- Start requests microphone and Screen & System Audio Recording permissions.
+- Recording access is checked before Start. Separate Allow/Open Settings controls
+  cover microphone and Screen & System Audio Recording. Denied access opens the
+  correct System Settings pane; returning refreshes the status automatically.
+  Start remains disabled until both permissions are granted. Permission requests
+  happen only after an explicit Allow click.
   SCStream supplies separate microphone and system buffers on the host clock.
   No video output is registered or saved. The default microphone and audio from
   all other apps are captured; VoiceInk's own playback is excluded.
@@ -40,12 +44,36 @@ Files are stored under:
         audio/<job UUID>.wav
         audio/<job UUID>.json
 
-Audio is retained locally for recovery; this preview has no meeting retention
+Audio is retained locally for recovery; this version has no meeting retention
 policy or deletion UI. The Files button opens the relevant directory. Final
 exports include raw ASR text only. A sudden process crash can still lose audio
 in the current, unfinished chunk (up to about 12 seconds); completed chunks are
 durable. Headphones are recommended because acoustic echo cancellation is not
 implemented.
+
+## Meeting detection
+
+A nonactivating, top-right banner offers **Meeting detected · Microsoft Teams ·
+Take notes** after Teams has sustained input and output audio IO for four seconds.
+The signal aggregates Teams helper processes using CoreAudio process properties;
+it is an audio-activity heuristic, not a Teams call-state API. The Teams device
+test/lobby can also use both directions, and a call joined without active input
+can be missed. No calendar, chat, call title, screen content or audio is captured.
+
+Take notes opens the transcript window without starting capture. Dismissal is
+remembered until the detected call ends. A 30-second grace period avoids another
+notification during short mute/device gaps. An existing recording suppresses the
+reminder. The banner menu and the window's gear control can disable Teams
+notifications persistently. This custom panel needs no Notifications permission.
+
+For a read-only check of the actual signal:
+
+    swift run meeting-probe --audio-only
+
+The first idle check on this Mac identified four Teams audio processes, with
+both input and output inactive and no call hint. Positive live-call detection
+still requires testing in Teams. No media or Accessibility permission is needed
+for this metadata check.
 
 ## Teams participant names
 
@@ -71,13 +99,24 @@ From this worktree:
 Meeting tests cover dual-source ordering, raw text, partial/final events, pause
 gaps and late results, conservative name resolution, interrupted resume recovery,
 invalid checkpoints, bounded/silent audio, durable queue failures and WAV bytes.
+Permission tests use the production controller with injected system calls to
+cover denial, explicit Allow, restricted access, settings links, refresh, and
+remembering a screen-access request across restarts. They do not reset or change
+the user's real permissions. Detection tests cover debounce, single-direction
+audio, transient gaps, unknown snapshots, duplicate suppression, existing capture
+and disabling/re-enabling notifications.
+
 Capture tests feed synthetic CMSampleBuffer data through the real AVAudioConverter
 without touching a microphone: stereo/native-rate input, source isolation and
 repeated small device packets. The converter respects requested packet counts
 and drains all output; a single oversized input buffer can otherwise lose samples.
 
 The actual macOS app is built separately with Xcode and fork flags LOCAL_BUILD
-and OKLABS. The local Debug bundle is ad-hoc signed. Build/test logs are under
+and OKLABS. The normal Release bundle uses the user's Developer ID certificate,
+the existing com.prakashjoshipax.VoiceInk bundle identifier, the same preferences,
+model/transcript directories and the LOCAL_BUILD login-Keychain namespace as the
+installed fork. It does not copy Debug preferences over production settings.
+Build/test logs are under
 /tmp/voiceink-meeting-*.log. No live meeting capture, paid ASR call, or participant
 attribution validation is implied by these automated checks.
 
@@ -85,12 +124,13 @@ attribution validation is implied by these automated checks.
 
 The local preview bundle is:
 
-    /tmp/voiceink-meeting-derived/Build/Products/Debug/VoiceInk Dev.app
+    /tmp/voiceink-meeting-release/VoiceInk.app
 
-1. Quit the installed VoiceInk before opening the preview: the existing app
-   architecture shares local transcript/model stores between Debug and Release.
+1. Quit the old preview before opening VoiceInk: the existing app architecture
+   shares local transcript/model stores between Debug and Release.
 2. Open File → Meeting Transcript…. Choose a downloaded local model or an
-   explicitly selected cloud model. Press Start and grant the two audio permissions.
+   explicitly selected cloud model. Use Allow for any missing recording permission,
+   follow macOS's instructions to reopen if requested, then press Start.
 3. Speak for 15–20 seconds. Check the microphone meter, Me text and timestamps.
 4. Pause, speak a phrase that must be absent, Resume, then speak another phrase.
    Stop, let the queue drain, Copy/Export and inspect Files.
@@ -113,3 +153,12 @@ N must be the observed call window index. Keep label snapshots outside git.
 The probe is bounded and read-only: no AX actions, screenshots, audio or permission
 prompts. Next, verify actual active-speaker attributes, their latency, background
 behavior and overlap across two participants before implementing name observation.
+
+## Upstream integration
+
+The feature preserves upstream ancestry and leaves sync/release scripts, package
+pins, project version metadata and Release identity unchanged. Five offline sync
+regressions cover repeated upstream version bumps, no-op, dry run, real conflicts,
+rewritten upstream history and an atomic push race. Current upstream/main is an
+ancestor of this branch. Future upstream edits to app entry hooks can still
+produce a normal merge conflict; automatic sync aborts without pushing on conflict.

@@ -20,6 +20,18 @@ Branches: `upstream` mirrors Beingpax `main`; `main` preserves OKLabs history an
 
 ## Flows
 
+For a local build with the normal app identity and existing settings, run
+`bash .oklabs/build-local.sh`. It selects a single Developer ID Application
+certificate (or Apple Development as a fallback), uses Release with LOCAL_BUILD
+and OKLABS, strips the upstream Sparkle feed from the built bundle, verifies the
+signature and prints the app path. It never installs, launches or publishes.
+No ad-hoc fallback is used: stable signing avoids changing the app's identity on
+every rebuild. Override the certificate with `OKLABS_LOCAL_SIGNING_IDENTITY` or
+the output/DerivedData paths with `OKLABS_LOCAL_OUTPUT_DIR` and
+`OKLABS_LOCAL_DERIVED_DATA`. The local entitlements keep iCloud disabled; the
+existing fork preferences, model directory and LOCAL_BUILD Keychain service are
+preserved. macOS may request permission once when switching from an ad-hoc build.
+
 - **Test** (`oklabs-test.yml`, every push to a branch other than `main`/`upstream`): local-Git sync
   regression scenarios on Linux, `swift test`
   and an unsigned arm64 app compile with `LOCAL_BUILD OKLABS` on standard `macos-26-intel` runners.

@@ -17,6 +17,9 @@ final class MeetingCoordinator: ObservableObject {
     @Published var selectedModelKey = ""
     @Published var title = ""
     @Published private(set) var savedMeetings: [MeetingSession] = []
+    @Published var showSetup = false
+    let permissions = MeetingPermissions()
+    let detector = MeetingDetector()
 
     let models: TranscriptionModelManager
     private let engine: VoiceInkEngine
@@ -51,6 +54,12 @@ final class MeetingCoordinator: ObservableObject {
 
     func start() async {
         guard canStart else { return }
+        permissions.refresh()
+        guard permissions.snapshot.isReady else {
+            showSetup = true
+            message = "Allow microphone and system audio access below, then start your meeting."
+            return
+        }
         guard engine.recordingState == .idle else { message = "Finish dictation before starting a meeting."; return }
         guard let model = models.usableModels.first(where: { $0.selectionKey == selectedModelKey }) else {
             message = "Select an available transcription model first. Download a local model in Manage Models if needed."
@@ -80,6 +89,7 @@ final class MeetingCoordinator: ObservableObject {
             installCallbacks(on: capture, sessionID: newSession.id)
             origin = MeetingAudioCapture.hostTime
             try await capture.start(origin: origin, from: 0)
+            detector.recordingDidStart()
         } catch {
             message = error.localizedDescription
             if session?.state == .recording {

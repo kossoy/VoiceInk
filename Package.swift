@@ -21,10 +21,13 @@ let package = Package(
     targets: [
         .target(name: "ScribeCore", path: "VoiceInk/OKLabs/ScribeCore"),
         .target(name: "MeetingCore", path: "VoiceInk/OKLabs/MeetingCore"),
+        .target(name: "MeetingSystem", dependencies: ["MeetingCore"], path: "VoiceInk/OKLabs/MeetingSystem"),
         .target(name: "MeetingCapture", dependencies: ["MeetingCore"], path: "VoiceInk/OKLabs/MeetingRuntime",
-                exclude: ["MeetingCoordinator.swift", "MeetingWindowView.swift"], sources: ["MeetingAudioCapture.swift"]),
+                exclude: ["MeetingCoordinator.swift", "MeetingWindowView.swift", "MeetingPermissionView.swift", "MeetingDetector.swift"],
+                sources: ["MeetingAudioCapture.swift"]),
         .testTarget(name: "MeetingCaptureTests", dependencies: ["MeetingCapture", "MeetingCore"], path: "Tests/MeetingCaptureTests"),
-        .executableTarget(name: "MeetingProbe", path: ".oklabs/meeting-probe"),
+        .testTarget(name: "MeetingSystemTests", dependencies: ["MeetingSystem", "MeetingCore"], path: "Tests/MeetingSystemTests"),
+        .executableTarget(name: "MeetingProbe", dependencies: ["MeetingSystem"], path: ".oklabs/meeting-probe"),
         .testTarget(name: "MeetingCoreTests", dependencies: ["MeetingCore"], path: "Tests/MeetingCoreTests"),
         .target(
             name: "OKLabsUpdater", path: "VoiceInk",

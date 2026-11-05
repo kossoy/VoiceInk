@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import MeetingSystem
 
 // Read-only diagnostics. Never requests permissions, enables AX attributes, records audio,
 // performs AX actions, or guesses which participant is currently speaking.
@@ -9,12 +10,15 @@ struct ProbeOptions {
     var maxNodes = 500
     var maxSeconds = 3.0
     var windowIndex: Int?
+    var audioOnly = false
 
     static func parse() throws -> ProbeOptions {
         var options = ProbeOptions()
         var arguments = Array(CommandLine.arguments.dropFirst()).makeIterator()
         while let argument = arguments.next() {
             switch argument {
+            case "--audio-only":
+                options.audioOnly = true
             case "--include-labels":
                 options.includeLabels = true
             case "--window":
@@ -34,7 +38,7 @@ struct ProbeOptions {
                 options.maxSeconds = seconds
             case "--help", "-h":
                 print("""
-                Usage: meeting-probe [--window N] [--include-labels] [--max-nodes N] [--max-seconds N]
+                Usage: meeting-probe [--audio-only] [--window N] [--include-labels] [--max-nodes N] [--max-seconds N]
 
                 Inspect only Microsoft Teams desktop Accessibility windows.
                 Default: role/identifier/attribute metadata; label/title/value fields are omitted.
@@ -42,6 +46,7 @@ struct ProbeOptions {
                 It requires --window N to restrict label inspection to the selected call window.
                 Prints JSON to stdout. Does not write files, capture media, or change Teams.
                 An active call is required to investigate active-speaker signals.
+                --audio-only reads Teams CoreAudio IO activity without AX access, labels or recording.
                 """)
                 exit(0)
             default:
@@ -123,6 +128,22 @@ func inspect(_ app: NSRunningApplication, options: ProbeOptions) -> [String: Any
 
 do {
     let options = try ProbeOptions.parse()
+    if options.audioOnly {
+        if #available(macOS 14.2, *) {
+            let activity = try TeamsAudioActivityReader().read()
+            let data = try JSONSerialization.data(withJSONObject: [
+                "teamsAudioProcessCount": activity.processCount,
+                "inputActive": activity.inputActive,
+                "outputActive": activity.outputActive,
+                "callAudioHint": activity.hasCallAudio,
+                "recordedAudio": false,
+            ], options: [.prettyPrinted, .sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+            exit(0)
+        } else {
+            throw ProbeError.usage("--audio-only requires macOS 14.2 or later")
+        }
+    }
     let trusted = AXIsProcessTrusted()
     let apps = ["com.microsoft.teams2", "com.microsoft.teams"].flatMap {
         NSRunningApplication.runningApplications(withBundleIdentifier: $0)

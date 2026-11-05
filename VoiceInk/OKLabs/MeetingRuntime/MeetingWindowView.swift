@@ -21,6 +21,13 @@ struct MeetingWindowView: View {
             footer.padding(16)
         }
         .frame(minWidth: 620, minHeight: 520)
+        .onAppear { meeting.permissions.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            meeting.permissions.refresh()
+        }
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            meeting.permissions.refresh()
+        }
         .background(WindowAccessor { window in
             windowDelegate.meeting = meeting
             window.delegate = windowDelegate
@@ -36,6 +43,12 @@ struct MeetingWindowView: View {
                 if meeting.isChangingCapture { ProgressView().controlSize(.small) }
                 Text(meeting.session?.state.rawValue.capitalized ?? "Ready")
                     .foregroundStyle(meeting.session?.state == .recording ? .red : .secondary)
+                Button { meeting.showSetup.toggle() } label: { Image(systemName: "gearshape") }
+                    .buttonStyle(.plain).help("Recording Access & Meeting Detection")
+            }
+            MeetingPermissionView(permissions: meeting.permissions, expanded: meeting.showSetup)
+            if meeting.showSetup {
+                MeetingDetectionSettingsView(detector: meeting.detector)
             }
             if meeting.canStart {
                 TextField("Meeting title", text: $meeting.title)
@@ -47,13 +60,13 @@ struct MeetingWindowView: View {
                             Text("\(model.displayName) · \(model.provider.rawValue)").tag(model.selectionKey)
                         }
                     }
-                    Button("Start Meeting") { Task { await meeting.start() } }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(meeting.selectedModelKey.isEmpty)
+                    MeetingStartButton(permissions: meeting.permissions, hasModel: !meeting.selectedModelKey.isEmpty) {
+                        Task { await meeting.start() }
+                    }
                 }
                 Text(isCloud
-                    ? "Audio chunks will be sent to the selected provider for transcription. Provider charges may apply."
-                    : "Transcription runs on this Mac with the selected local model.")
+                    ? "Cloud transcription · Audio is sent to the selected provider."
+                    : "Local transcription · Audio stays on this Mac.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 Text(meeting.session?.title ?? "Meeting").font(.headline)
@@ -68,7 +81,7 @@ struct MeetingWindowView: View {
                         .disabled(!meeting.hasOpenCapture || meeting.isChangingCapture)
                 }
             }
-            Text("Captures the default microphone and audio from all other apps. Use headphones to keep voices separate. Audio and raw transcript are saved locally.")
+            Text("Microphone + audio from other apps · Saved on this Mac · Headphones recommended")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let message = meeting.message {
                 Text(message).font(.callout).foregroundStyle(.orange).textSelection(.enabled)
