@@ -629,7 +629,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 225;
+				CURRENT_PROJECT_VERSION = 226;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "\"VoiceInk/Preview Content\"";
 				DEVELOPMENT_TEAM = V6J6A3VWY2;
@@ -645,7 +645,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 2.25;
+				MARKETING_VERSION = 2.26;
 				PRODUCT_BUNDLE_IDENTIFIER = com.prakashjoshipax.VoiceInk.dev;
 				PRODUCT_MODULE_NAME = VoiceInk;
 				PRODUCT_NAME = "VoiceInk Dev";
@@ -666,7 +666,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 225;
+				CURRENT_PROJECT_VERSION = 226;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "\"VoiceInk/Preview Content\"";
 				DEVELOPMENT_TEAM = V6J6A3VWY2;
@@ -682,7 +682,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 2.25;
+				MARKETING_VERSION = 2.26;
 				PRODUCT_BUNDLE_IDENTIFIER = com.prakashjoshipax.VoiceInk;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "ENABLE_NATIVE_SPEECH_ANALYZER $(inherited)";
@@ -889,7 +889,7 @@
 			repositoryURL = "https://github.com/Beingpax/LLMkit.git";
 			requirement = {
 				kind = revision;
-				revision = a7541e056968af1b201dfe152c5e24ecefdb09d8;
+				revision = ff32e368eeaffd2f6c1ef0d3614a0bddea4c3fd5;
 			};
 		};
 		E1ADD45D2CC544F100303ECB /* XCRemoteSwiftPackageReference "Sparkle" */ = {
