@@ -1,0 +1,31 @@
+# Recover post-publish download verification without rebuilding signed artifacts.
+name: oklabs-verify-release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact existing latest release tag
+        required: true
+        type: string
+      commit:
+        description: Exact expected 40-character fork commit SHA
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Focused download recovery tests
+        run: python3 -m unittest discover -s .oklabs/ci/tests -p 'test_release_download.py' -v
+      - name: Verify existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_TAG: ${{ inputs.tag }}
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+        run: bash .oklabs/ci/verify-release.sh "$EXPECTED_TAG" "$EXPECTED_COMMIT" "$RUNNER_TEMP/release-verification"

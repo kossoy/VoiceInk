@@ -145,8 +145,11 @@ set -euo pipefail
 trap 'echo "FAILED at line $LINENO: $BASH_COMMAND" >&2' ERR
 T=$(mktemp -d ~/Downloads/voiceink-oklabs.XXXX); cd "$T"
 echo "1/6 download"
-curl -fsSLO https://github.com/kossoy/VoiceInk/releases/latest/download/VoiceInk-oklabs.zip
-curl -fsSLO https://github.com/kossoy/VoiceInk/releases/latest/download/SHA256SUMS
+if ! curl -fsSLO https://github.com/kossoy/VoiceInk/releases/latest/download/VoiceInk-oklabs.zip ||
+   ! curl -fsSLO https://github.com/kossoy/VoiceInk/releases/latest/download/SHA256SUMS; then
+    echo "GitHub browser download failed; retrying through the release asset API"
+    gh release download --repo kossoy/VoiceInk --pattern VoiceInk-oklabs.zip --pattern SHA256SUMS --dir "$T" --clobber
+fi
 grep VoiceInk-oklabs.zip SHA256SUMS | shasum -a 256 -c -
 echo "2/6 unpack"
 ditto -x -k VoiceInk-oklabs.zip staged
@@ -170,6 +173,19 @@ echo "6/6 launch"
 SH
 chmod +x ~/.local/bin/voiceink-oklabs-update
 ```
+
+The download stage falls back to the GitHub CLI's official release asset API when
+GitHub's browser redirect route fails. `gh` must already be installed for that
+fallback; checksum, signature, team and Gatekeeper checks are unchanged. CI uses
+the same fallback in `.oklabs/ci/download-release-assets.sh`, additionally binding
+all downloaded assets and the checksum manifest to the expected tag, source SHA,
+GitHub asset digests and the build's original checksums.
+
+If publication succeeded but download verification failed, use the read-only
+`oklabs-verify-release.yml` workflow with the exact existing `tag` and `commit`
+inputs. It verifies the published release without building, signing, publishing,
+installing or sending another release notification. The historical failed run
+stays failed; the separate verification run records recovery.
 
 Update (same command):
 
