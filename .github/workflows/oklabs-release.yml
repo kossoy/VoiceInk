@@ -190,21 +190,15 @@ jobs:
             --latest \
             "$D/VoiceInk-oklabs.zip" "$D/VoiceInk-oklabs.dmg" "$D/scribe-bench-macos-arm64.zip" "$D/SHA256SUMS"
 
-      - name: Check the stable download URL
+      - name: Verify published release downloads
         id: urlcheck
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          T="$(mktemp -d)"; cd "$T"
-          BASE="https://github.com/$GITHUB_REPOSITORY/releases/latest/download"
-          for i in 1 2 3 4 5 6; do
-            curl -fsSLO "$BASE/SHA256SUMS" && grep -q "$(cut -d' ' -f1 "$OUT_DIR/dist/SHA256SUMS" | head -1)" SHA256SUMS && break
-            sleep 10
-          done
-          cmp -s SHA256SUMS "$OUT_DIR/dist/SHA256SUMS" || { echo "error: releases/latest still serves another release" >&2; exit 1; }
-          curl -fsSLO "$BASE/VoiceInk-oklabs.zip"
-          # Against this build's own sums, so a stale /latest can never pass.
-          grep VoiceInk-oklabs.zip "$OUT_DIR/dist/SHA256SUMS" | shasum -a 256 -c -
+          T="$(mktemp -d)"
+          bash .oklabs/ci/verify-release.sh "$OKLABS_TAG" "$GITHUB_SHA" "$T" "$OUT_DIR/dist/SHA256SUMS"
           echo "### VoiceInk OKLabs $OKLABS_VERSION" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"; cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"; cat "$T/SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       # Every published release, even if the download check failed (the text says so).
       # Never fails the job; silent on a push that changed no app code or build input.
