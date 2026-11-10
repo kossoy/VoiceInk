@@ -80,6 +80,43 @@ final class MeetingCaptureTests: XCTestCase {
         }
     }
 
+    func testProcessedMicrophoneDoesNotBecomeSilenceForDiscreteOrQuadLayouts() throws {
+        for tag in [kAudioChannelLayoutTag_DiscreteInOrder | 4, kAudioChannelLayoutTag_Quadraphonic,
+                    kAudioChannelLayoutTag_DiscreteInOrder | 9] {
+            let layout = try XCTUnwrap(AVAudioChannelLayout(layoutTag: tag))
+            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000,
+                                       interleaved: false, channelLayout: layout)
+            let input = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4800))
+            input.frameLength = 4800
+            for channel in 0..<Int(format.channelCount) {
+                for frame in 0..<4800 { input.floatChannelData![channel][frame] = channel == 0 ? 0.25 : -0.75 }
+            }
+            let output = try MeetingAudioCapture().convert(input, source: .microphone)
+            XCTAssertEqual(output.count, 1600, accuracy: 64)
+            // A default [-1] mapping produces exact zeros; folding all channels together
+            // would corrupt or invert this signal. Only the selected mic input belongs here.
+            XCTAssertTrue(output.dropFirst(100).allSatisfy { abs(Int($0) - 8192) < 20 })
+        }
+    }
+
+    func testNativeMicrophoneObserverSeesOriginalChannelsAndExplicitMapOnlyForMic() throws {
+        let capture = MeetingAudioCapture()
+        let observed = expectation(description: "Native microphone input observed")
+        observed.assertForOverFulfill = true
+        capture.onMicrophoneBuffer = { input, map in
+            XCTAssertEqual(input.format.sampleRate, 48_000)
+            XCTAssertEqual(input.frameLength, 960)
+            XCTAssertEqual(input.floatChannelData?[0][0], 0.25)
+            XCTAssertEqual(map, [0])
+            observed.fulfill()
+        }
+        let input = try pcm(rate: 48_000, seconds: 0.02)
+        _ = try capture.convert(input, source: .microphone)
+        _ = try capture.convert(input, source: .system)
+        wait(for: [observed], timeout: 1)
+        XCTAssertEqual(input.floatChannelData?[0][0], 0.25)
+    }
+
     func testTapCopyOwnsOnlyValidFramesBeforeBorrowedBufferIsReused() throws {
         let input = try pcm(rate: 48_000, channels: 2, seconds: 0.02, capacityMultiplier: 4)
         // Some audio producers expose the whole allocation in the buffer list.

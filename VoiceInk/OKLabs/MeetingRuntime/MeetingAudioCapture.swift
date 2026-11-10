@@ -115,6 +115,10 @@ final class MeetingAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
     /// Optional local probe tap, invoked on sampleQueue. The app leaves this unset.
     /// Continuous PCM is needed to measure AEC independently of the chunker's energy gate.
     var onSamples: (@Sendable (MeetingAudioSource, [Int16], TimeInterval) -> Void)?
+    /// Optional read-only probe observer on sampleQueue, before microphone conversion.
+    /// The buffer is borrowed for this call only; observers must not retain or mutate it.
+    /// The app leaves this unset, so native channel diagnostics have no normal capture cost.
+    var onMicrophoneBuffer: (@Sendable (AVAudioPCMBuffer, [Int]) -> Void)?
     private let sampleQueue = DispatchQueue(label: "com.oklabs.voiceink.meeting.audio", qos: .userInitiated)
     private var devices: (any MeetingCaptureDevices)?
     private enum State { case stopped, starting, running, stopping }
@@ -348,10 +352,19 @@ final class MeetingAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
         if converters[source]?.inputFormat != format {
             converters[source] = AVAudioConverter(from: format, to: target)
             converters[source]?.primeMethod = .none
+            if source == .microphone {
+                // Preserve the first-input policy used by mono/stereo microphones.
+                // Discrete/quad layouts can otherwise default to [-1], which silently
+                // maps no input at all to mono. Do not mix additional VPIO channels.
+                converters[source]?.channelMap = [0]
+            }
         }
         guard let converter = converters[source],
               let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 4096)
         else { throw MeetingCaptureError.invalidAudio }
+        if source == .microphone, let onMicrophoneBuffer {
+            onMicrophoneBuffer(input, converter.channelMap.map(\.intValue))
+        }
         var cursor: AVAudioFrameCount = 0
         var pcm: [Int16] = []
         while true {
