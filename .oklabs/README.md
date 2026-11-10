@@ -20,6 +20,19 @@ Branches: `upstream` mirrors Beingpax `main`; `main` preserves OKLabs history an
 
 ## Flows
 
+Meeting mode captures other apps through ScreenCaptureKit and the microphone through
+AVAudioEngine voice processing. The microphone path requests acoustic echo cancellation;
+it does not silently fall back to raw capture if initialization fails. Minimum ducking
+reduces the effect on other apps' playback volume, but does not guarantee unchanged volume.
+A microphone route/format change stops the recording with a visible error instead of
+continuing with only system audio. Start a new recording after selecting the desired route.
+Saved audio and transcript history are unchanged.
+
+After a capture change, measure echo reduction using speech played by another app through
+the real speaker route, then check local-only speech, double talk, headphones, pause/resume,
+and stop. Confirm the system track remains present and local words survive overlap.
+Unit tests or `isVoiceProcessingEnabled` alone do not prove a working playback reference.
+
 For a local build with the normal app identity and existing settings, run
 `bash .oklabs/build-local.sh`. It selects a single Developer ID Application
 certificate (or Apple Development as a fallback), uses Release with LOCAL_BUILD
