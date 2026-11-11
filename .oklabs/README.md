@@ -290,11 +290,13 @@ for s in Microphone Accessibility ScreenCapture AppleEvents PostEvent ListenEven
 |---|---|---|
 | `oklabs.scribeEngine` | string, `oklabs` | `upstream` = LLMkit's ElevenLabs client instead of the fork engine |
 | `oklabs.keytermsFile` | string, unset | keyterms file: one term per line (`#` comments) or a JSON array; first in file order, max 50 × 20 characters, re-read for every recording |
-| `oklabs.managedMode` | bool, `false` | on every launch (after onboarding), make the "Scribe" mode default: Scribe V2 realtime, language auto, no AI, no screen/selection/clipboard context; disable every other mode |
+| `oklabs.managedMode` | bool, `false` | on every launch (after onboarding), make the "Scribe" mode default: the `oklabs.scribeModel` Scribe model with realtime on, language auto, no AI, no screen/selection/clipboard context; disable every other mode |
 | `oklabs.stripBracketedText` | bool, `false` | upstream's removal of `()`, `[]`, `{}` and `<tag>…</tag>` from transcripts |
 | `oklabs.applyWordReplacements` | bool, `false` | apply Dictionary → Word Replacements |
 | `oklabs.prePasteDelayMs` | int, `200` | delay before paste, clamped to 0-500 ms |
 | `oklabs.notifyOnFailure` | bool, `true` | notification with Retry (re-transcribes, copies to the clipboard) when a transcription fails |
+| `oklabs.scribeModel` | string, `scribe_v3` | model the managed "Scribe" mode is reset to on every launch: `scribe_v3`, `scribe_v2` or `scribe_v2_medical`; anything else means `scribe_v3`. The one switch back to V2 |
+| `oklabs.scribeRealtimeModel` | string, unset | force the fork engine's live model, e.g. `scribe_v2_realtime`; unset = follow the mode's Scribe model (V3 → `scribe_v3_live`, V2 and V2 Medical → `scribe_v2_realtime`) |
 | `oklabs.scribeEndpoint` | string, unset | realtime endpoint override, e.g. a regional `wss://…/v1/speech-to-text/realtime` |
 
 The fork also registers these upstream keys as `false` by default:
@@ -311,12 +313,20 @@ to live dictation, file transcription and history retranscription.
 
 ## Scribe engine behaviour
 
+Model: the live model follows the mode's Scribe model, so the Scribe V2 / V3 choice in the UI
+is honoured (V3 → `scribe_v3_live`, V2 and V2 Medical → `scribe_v2_realtime`; ElevenLabs has no
+live medical model). With `oklabs.managedMode` on, that choice is reset on every launch to
+`oklabs.scribeModel` (default `scribe_v3`); change the key, not the UI, to stay on V2. Both
+live models take the same parameters (manual commit, `no_verbatim`, 50 keyterms of at most
+20 characters), see https://elevenlabs.io/docs/overview/models#scribe-v3-live. Meetings default
+to Scribe V3 batch when dictation runs on Scribe V2; a model picked in the meeting window wins.
+
 100 ms frames; the client commits at the first 0.3 s pause after 30 s and always by 34 s, so the
 server's ~36 s auto-commit never fires; every commit is counted and answered (`commit_throttled`
 counts as an answer, unsolicited server commits are kept), and all segments are joined; the final
 segment is padded to 0.35 s; a socket write blocked for 2 s marks the stream failed; after stop
 the wait is at most 8 s, counted from the stop request. A failed stream re-uploads the whole
-recording to batch `scribe_v2`; a bad key, quota or terms error is reported without a retry.
+recording to the mode's batch model (`scribe_v3` by default); a bad key, quota or terms error is reported without a retry.
 
 ## Real-voice harness
 

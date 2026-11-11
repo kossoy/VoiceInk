@@ -11,7 +11,9 @@ enum ManagedSettings {
     /// Fixed id so the managed mode is found again on every launch.
     static let modeId = UUID(uuidString: "0C1AB5C0-5C21-4BE0-A000-000000000001")!
     static let modeName = "Scribe"
-    static let transcriptionModelName = "scribe_v2"
+    /// `oklabs.scribeModel`, default Scribe V3: the fork engine streams it as `scribe_v3_live`,
+    /// batch retries use `scribe_v3`. `defaults write … oklabs.scribeModel scribe_v2` goes back.
+    static var transcriptionModelName: String { OKLabsSettings.managedScribeModel }
 
     private static let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "OKLabsManagedSettings")
 

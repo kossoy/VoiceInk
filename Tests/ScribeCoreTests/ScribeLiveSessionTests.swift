@@ -77,7 +77,7 @@ final class ScribeLiveSessionTests: XCTestCase {
         XCTAssertEqual(log.commits, 1)
         XCTAssertEqual(log.segments, [80_000])
         XCTAssertEqual(log.apiKey, "test-key")
-        XCTAssertTrue(log.path.contains("model_id=scribe_v2_realtime"))
+        XCTAssertTrue(log.path.contains("model_id=scribe_v3_live"))
         XCTAssertTrue(log.path.contains("commit_strategy=manual"))
         XCTAssertTrue(log.path.contains("no_verbatim=true"))
         XCTAssertTrue(log.path.contains("keyterms=T3%20Code"))
