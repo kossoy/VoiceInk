@@ -28,6 +28,23 @@ A microphone route/format change stops the recording with a visible error instea
 continuing with only system audio. Start a new recording after selecting the desired route.
 Saved audio and transcript history are unchanged.
 
+Speaker separation: after Stop, once every chunk is transcribed, the system-audio track
+("Others") is diarized on this Mac with FluidAudio's offline pipeline (pyannote segmentation,
+WeSpeaker embeddings, VBx clustering; `MeetingRuntime/MeetingDiarizer.swift`). The saved
+system chunks are stitched with 0.5 s silences and the turns mapped back to the session clock
+(`diarization.json` beside `session.json`; cluster IDs and times only, no voice embeddings).
+Each line takes the voice that covers most of it and shows "Speaker N" until named. Clicking
+a speaker renames that voice everywhere or names only that line; names live in `session.json`
+(schema 2) and survive "Detect Speakers Again". Precedence, strongest first: the user's name
+for the line, the user's name for the voice, complete meeting-app cues for the line, the
+voice's cue majority (`MeetingSpeakerNaming`, ready for a Teams Accessibility observer),
+Speaker N, Others. The microphone is always Me. Models download once from Hugging Face into
+FluidAudio's model cache; nothing else leaves the Mac. Older meetings: open one and use
+Detect Speakers. Measure on a saved meeting without the app: `.oklabs/diarization-bench`. Off switch:
+`defaults write com.prakashjoshipax.VoiceInk OKLabsMeetingSpeakerDiarization -bool NO`.
+It needs the FluidAudio `Diarizer` package trait in `project.pbxproj` (fork contract):
+with `traits = ( )` Xcode 26+ compiles FluidAudio without its diarizer.
+
 After a capture change, measure echo reduction using speech played by another app through
 the real speaker route, then check local-only speech, double talk, headphones, pause/resume,
 and stop. Confirm the system track remains present and local words survive overlap.
