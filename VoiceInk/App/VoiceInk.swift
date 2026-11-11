@@ -10,8 +10,11 @@ struct VoiceInkApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     let container: ModelContainer
 
-    @StateObject private var engine: VoiceInkEngine
-    @StateObject private var meetingCoordinator: MeetingCoordinator
+    // Retain the engine and the meeting coordinator without re-evaluating every scene on each
+    // recording state, live transcript or meeting level update. Views that display their state
+    // observe them via environmentObject.
+    @State private var engine: VoiceInkEngine
+    @State private var meetingCoordinator: MeetingCoordinator
     // Retain managers without subscribing the entire scene to download progress.
     @State private var whisperModelManager: WhisperModelManager
     @State private var fluidAudioModelManager: FluidAudioModelManager
@@ -159,12 +162,12 @@ struct VoiceInkApp: App {
         _fluidAudioModelManager = State(initialValue: fluidAudioModelManager)
         _transcriptionModelManager = StateObject(wrappedValue: transcriptionModelManager)
         _recorderUIManager = StateObject(wrappedValue: recorderUIManager)
-        _engine = StateObject(wrappedValue: engine)
+        _engine = State(initialValue: engine)
         let meetingCoordinator = MeetingCoordinator(
             engine: engine, models: transcriptionModelManager,
             registry: TranscriptionServiceRegistry(modelProvider: whisperModelManager,
                 modelsDirectory: modelsDirectory, modelContext: resolvedContainer.mainContext))
-        _meetingCoordinator = StateObject(wrappedValue: meetingCoordinator)
+        _meetingCoordinator = State(initialValue: meetingCoordinator)
 
         // 7. Create other services that depend on engine
         let recordingShortcutManager = RecordingShortcutManager(engine: engine, recorderUIManager: recorderUIManager)
