@@ -1,0 +1,7 @@
+#!/bin/sh
+# GIT_ASKPASS for GitHub App installation tokens: the token comes from the
+# GH_APP_TOKEN env var of the calling git process, never from argv or disk.
+case "$1" in
+    Username*) echo x-access-token ;;
+    *) printf '%s\n' "$GH_APP_TOKEN" ;;
+esac

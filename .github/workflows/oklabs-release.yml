@@ -16,6 +16,7 @@ on:
       - '.oklabs/ci/sync.sh'
       - '.oklabs/ci/notify.sh'
       - '.github/workflows/oklabs-autoresolve-pr.yml'
+      - '.oklabs/baldr/**'
   workflow_dispatch:
     inputs:
       telegram_test:

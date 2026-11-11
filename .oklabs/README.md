@@ -28,6 +28,23 @@ A microphone route/format change stops the recording with a visible error instea
 continuing with only system audio. Start a new recording after selecting the desired route.
 Saved audio and transcript history are unchanged.
 
+Speaker separation: after Stop, once every chunk is transcribed, the system-audio track
+("Others") is diarized on this Mac with FluidAudio's offline pipeline (pyannote segmentation,
+WeSpeaker embeddings, VBx clustering; `MeetingRuntime/MeetingDiarizer.swift`). The saved
+system chunks are stitched with 0.5 s silences and the turns mapped back to the session clock
+(`diarization.json` beside `session.json`; cluster IDs and times only, no voice embeddings).
+Each line takes the voice that covers most of it and shows "Speaker N" until named. Clicking
+a speaker renames that voice everywhere or names only that line; names live in `session.json`
+(schema 2) and survive "Detect Speakers Again". Precedence, strongest first: the user's name
+for the line, the user's name for the voice, complete meeting-app cues for the line, the
+voice's cue majority (`MeetingSpeakerNaming`, ready for a Teams Accessibility observer),
+Speaker N, Others. The microphone is always Me. Models download once from Hugging Face into
+FluidAudio's model cache; nothing else leaves the Mac. Older meetings: open one and use
+Detect Speakers. Measure on a saved meeting without the app: `.oklabs/diarization-bench`. Off switch:
+`defaults write com.prakashjoshipax.VoiceInk OKLabsMeetingSpeakerDiarization -bool NO`.
+It needs the FluidAudio `Diarizer` package trait in `project.pbxproj` (fork contract):
+with `traits = ( )` Xcode 26+ compiles FluidAudio without its diarizer.
+
 After a capture change, measure echo reduction using speech played by another app through
 the real speaker route, then check local-only speech, double talk, headphones, pause/resume,
 and stop. Confirm the system track remains present and local words survive overlap.
@@ -99,7 +116,8 @@ preserved. macOS may request permission once when switching from an ad-hoc build
   tree may differ from `git merge-tree --write-tree` only in the conflicted paths, no conflict
   markers, then `check-fork-contracts.py` with its manifest from the old `main`, `tests/sync.sh`
   and the fork guard unittests. It pushes one merge commit to `oklabs/auto-resolve/<upstream sha10>`
-  with the deploy key «baldr voiceink-autoresolve» (write, this repo only). That push starts
+  as the GitHub App `kossoy-voiceink-autoresolve` (installed on this repo only, contents
+  write; 1 h installation token per push via `GIT_ASKPASS`). That push starts
   `oklabs-test` (swift test, app compile), and `oklabs-autoresolve-pr.yml` opens the PR to `main`
   with the agent's explanation and sends Telegram. **Nothing merges automatically**: review the
   resolution and merge with a merge commit. One attempt per upstream commit and **one pending
@@ -115,9 +133,12 @@ preserved. macOS may request permission once when switching from an ad-hoc build
   old `main`'s `.oklabs/` with `python -I`, never from the merge worktree, so incoming top-level
   files cannot shadow modules. The `Conflicted:` trailer is written by the script as the last
   paragraph and read by the workflow from there; commit text reaches the workflow shell only
-  through env variables. Known limit: on a user-owned repo GitHub attributes deploy-key pushes
-  to the owner, so a ruleset cannot restrict the deploy key to `oklabs/auto-resolve/**`; it can
-  write any ref. It lives only on baldr, outside the agent sandbox. On failure nothing is pushed
+  through env variables. Repository ruleset `autoresolve-app-only-own-branches` blocks creating,
+  updating and deleting every branch except `oklabs/auto-resolve/**`, with bypass for the admin
+  role only, so the App cannot touch `main` or `upstream` while Oleg and `OKLABS_SYNC_TOKEN`
+  (admin) keep working. The App key lives on baldr (`~/.config/voiceink-autoresolve/app.pem`,
+  0600, outside the agent sandbox); canon in Infisical `services:/voiceink-autoresolve`
+  (`GITHUB_APP_CLIENT_ID`, `GITHUB_APP_PRIVATE_KEY_B64`). On failure nothing is pushed
   and Telegram gets «VoiceInk auto-resolve не справился» with the log path on baldr
   (`~/.local/state/voiceink-oklabs/runs/<run>.log`). Retry an upstream commit:
   `rm ~/.local/state/voiceink-oklabs/attempted/<sha>` on baldr, then

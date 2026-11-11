@@ -18,6 +18,9 @@ final class MeetingCoordinator: ObservableObject {
     @Published var title = ""
     @Published private(set) var savedMeetings: [MeetingSession] = []
     @Published var showSetup = false
+    /// Voice clusters of the current session's system audio, once diarization ran.
+    @Published private(set) var diarization: MeetingDiarization?
+    @Published private(set) var isDiarizing = false
     let permissions = MeetingPermissions()
     let detector = MeetingDetector()
 
@@ -32,6 +35,16 @@ final class MeetingCoordinator: ObservableObject {
     private var selectedModel: (any TranscriptionModel)?
     private var language: String?
     private var queueIsSuspended = false
+    private let diarizer = MeetingDiarizer()
+    /// Sessions whose automatic diarization already ran or failed in this app run; a manual
+    /// "Detect Speakers" still works for them.
+    private var diarizationAttempted = Set<UUID>()
+
+    /// On by default; `defaults write com.prakashjoshipax.VoiceInk OKLabsMeetingSpeakerDiarization -bool NO` turns it off.
+    static let diarizationDefaultsKey = "OKLabsMeetingSpeakerDiarization"
+    private var automaticDiarizationEnabled: Bool {
+        UserDefaults.standard.object(forKey: Self.diarizationDefaultsKey) as? Bool ?? true
+    }
 
     init(engine: VoiceInkEngine, models: TranscriptionModelManager, registry: TranscriptionServiceRegistry) {
         self.engine = engine
@@ -76,6 +89,7 @@ final class MeetingCoordinator: ObservableObject {
                 ? "Meeting \(Date().formatted(date: .abbreviated, time: .shortened))" : title)
             let directory = try store.save(newSession)
             session = newSession
+            diarization = nil
             jobs = []
             queueIsSuspended = false
             jobStore = MeetingAudioJobStore(sessionDirectory: directory)
@@ -251,6 +265,10 @@ final class MeetingCoordinator: ObservableObject {
             }
             session = recovered
             jobs = recoveredJobs
+            do { diarization = try store.loadDiarization(id: recovered.id) } catch {
+                diarization = nil
+                message = "Speaker data of this meeting is unreadable; use Detect Speakers to rebuild it."
+            }
             jobStore = audioStore
             queueIsSuspended = true
             message = pendingCount + failedCount > 0 ? "Recovered audio is ready. Retry to transcribe pending chunks." : nil
@@ -277,6 +295,77 @@ final class MeetingCoordinator: ObservableObject {
 
     private func releaseDictationIfFinished() {
         if !hasOpenCapture && !isTranscribing { engine.isMeetingActive = false }
+        diarizeAutomaticallyIfReady()
+    }
+
+    // MARK: - Speakers
+
+    var speakerLabeler: MeetingSpeakerLabeler? {
+        session.map { MeetingSpeakerLabeler(session: $0, diarization: diarization) }
+    }
+
+    /// Whether "Detect Speakers" makes sense now: finished, fully transcribed, has system audio.
+    var canDetectSpeakers: Bool {
+        guard let session, session.state == .finished, !isDiarizing, !isTranscribing, pendingCount == 0 else {
+            return false
+        }
+        return systemAudioSeconds >= MeetingDiarizer.minimumAudioSeconds
+    }
+
+    private var systemAudioSeconds: TimeInterval {
+        jobs.filter { $0.source == .system }.reduce(0) { $0 + $1.range.end - $1.range.start }
+    }
+
+    /// Runs after Stop once the transcription queue has drained; never blocks Stop or the queue.
+    private func diarizeAutomaticallyIfReady() {
+        guard automaticDiarizationEnabled, diarization == nil, let id = session?.id,
+            !diarizationAttempted.contains(id), canDetectSpeakers
+        else { return }
+        detectSpeakers()
+    }
+
+    /// Separates the voices in "Others". On failure lines keep their current labels.
+    func detectSpeakers() {
+        guard canDetectSpeakers, let session, let jobStore else { return }
+        let sessionID = session.id
+        diarizationAttempted.insert(sessionID)
+        let chunks = jobs.filter { $0.source == .system }.map {
+            MeetingDiarizer.Chunk(range: $0.range, url: jobStore.audioURL(for: $0.id))
+        }
+        isDiarizing = true
+        Task { [weak self, diarizer] in
+            let result: Result<MeetingDiarization, Error>
+            do { result = .success(try await diarizer.diarize(chunks)) } catch { result = .failure(error) }
+            guard let self else { return }
+            self.isDiarizing = false
+            switch result {
+            case .success(let found):
+                do {
+                    // The user may have opened another meeting meanwhile: save into the right one.
+                    let owner = self.session?.id == sessionID ? self.session! : try self.store.load(id: sessionID)
+                    try self.store.saveDiarization(found, for: owner)
+                    if self.session?.id == sessionID { self.diarization = found }
+                } catch {
+                    self.message = "Could not save speaker data: \(error.localizedDescription)"
+                }
+            case .failure(let error):
+                if self.session?.id == sessionID {
+                    self.message = "Speaker separation did not run: \(error.localizedDescription) Lines stay labelled Others."
+                }
+            }
+        }
+    }
+
+    /// Names every line of a voice cluster. nil or blank restores the automatic name.
+    func renameSpeakerCluster(_ clusterID: String, to name: String?) {
+        session?.nameSpeakerCluster(clusterID, as: name)
+        checkpoint()
+    }
+
+    /// Names one line only. nil or blank restores the cluster's name.
+    func renameLine(_ segmentID: UUID, to name: String?) {
+        do { try session?.nameSegment(segmentID, as: name) } catch { message = error.localizedDescription; return }
+        checkpoint()
     }
 
     func showFiles() {
@@ -287,7 +376,7 @@ final class MeetingCoordinator: ObservableObject {
     func copyTranscript() {
         guard let session else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(MeetingTranscriptExport.text(session), forType: .string)
+        NSPasteboard.general.setString(MeetingTranscriptExport.text(session, diarization: diarization), forType: .string)
     }
 
     func export() {
@@ -296,7 +385,7 @@ final class MeetingCoordinator: ObservableObject {
         panel.allowedContentTypes = [.plainText]
         panel.nameFieldStringValue = "meeting-\(session.startedAt.formatted(.iso8601.year().month().day())).txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try MeetingTranscriptExport.text(session).write(to: url, atomically: true, encoding: .utf8) }
+        do { try MeetingTranscriptExport.text(session, diarization: diarization).write(to: url, atomically: true, encoding: .utf8) }
         catch { message = error.localizedDescription }
     }
 }
