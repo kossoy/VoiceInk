@@ -1,0 +1,81 @@
+# OKLabs fork: open the PR for an upstream conflict the auto-resolver on baldr resolved.
+# baldr (voiceink-oklabs-autoresolve, deploy key "baldr voiceink-autoresolve") pushes
+# oklabs/auto-resolve/<upstream sha10> with one merge commit whose body explains the
+# resolution. That push also starts oklabs-test (swift test + app compile) on the same SHA,
+# so its checks show on this PR. The PR is never merged automatically: Oleg reviews it and
+# merges with a merge commit (no squash/rebase). One Telegram message per new PR.
+name: oklabs-autoresolve-pr
+
+on:
+  push:
+    branches: ['oklabs/auto-resolve/**']
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: oklabs-autoresolve-pr-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pr:
+    name: Open the auto-resolve PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Open or find the PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          git rev-parse -q --verify HEAD^2 >/dev/null || { echo "::error::$BRANCH head is not a merge commit"; exit 1; }
+          upstream="$(git rev-parse HEAD^2)"
+          {
+            echo "upstream=$upstream"
+            echo "subject=$(git log -1 --format=%s "$upstream")"
+            echo "conflicted=$(git log -1 --format=%B HEAD | sed -n 's/^Conflicted: //p' | head -1)"
+          } >> "$GITHUB_OUTPUT"
+          url="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state all --json url -q '.[0].url')"
+          if [ -n "$url" ]; then
+            echo "state=existing" >> "$GITHUB_OUTPUT"
+          else
+            body="$RUNNER_TEMP/body.md"
+            {
+              git log -1 --format=%b HEAD
+              printf '\n---\n'
+              printf 'Opened automatically for the auto-resolver on baldr (`voiceink-oklabs-autoresolve`). '
+              printf 'Checks: `oklabs-test` on this SHA (swift test, unsigned app compile).\n\n'
+              printf '**Merge with a merge commit** (no squash/rebase) so upstream ancestry and the resolution stay in history. '
+              printf 'After the merge, run `oklabs-sync` (or wait for the nightly run) to fast-forward the `upstream` mirror; '
+              printf 'see `.oklabs/README.md`, Sync.\n'
+            } > "$body"
+            url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+              --title "$(git log -1 --format=%s HEAD)" --body-file "$body")"
+            echo "state=new" >> "$GITHUB_OUTPUT"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "### auto-resolve PR" >> "$GITHUB_STEP_SUMMARY"
+          echo "- $url" >> "$GITHUB_STEP_SUMMARY"
+      - name: Telegram
+        if: steps.pr.outputs.state == 'new'
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          PR_STATE: ${{ steps.pr.outputs.state }}
+          UPSTREAM_SHA: ${{ steps.pr.outputs.upstream }}
+          UPSTREAM_SUBJECT: ${{ steps.pr.outputs.subject }}
+          CONFLICTED: ${{ steps.pr.outputs.conflicted }}
+        run: bash .oklabs/ci/notify.sh autoresolve-pr

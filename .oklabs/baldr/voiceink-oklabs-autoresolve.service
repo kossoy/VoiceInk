@@ -1,0 +1,10 @@
+[Unit]
+Description=voiceink-oklabs: resolve an upstream VoiceInk merge conflict with Claude Code, push oklabs/auto-resolve/<sha> for a PR
+Documentation=https://github.com/kossoy/VoiceInk/blob/main/.oklabs/README.md
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/voiceink-oklabs-autoresolve
+TimeoutStartSec=100min
+Nice=15
+IOSchedulingClass=idle

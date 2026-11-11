@@ -3,7 +3,7 @@
 # A message never fails the calling job: problems become ::warning:: lines and the
 # script exits 0. Only `test` exits 1 when its message was not delivered.
 #
-# Usage: notify.sh prev-tag | release-ok | sync-failed | test
+# Usage: notify.sh prev-tag | release-ok | sync-failed | autoresolve-pr | test
 #   prev-tag     print the newest published release whose tag is on another commit than
 #                $GITHUB_SHA (the release to compare with; a re-run never compares with
 #                the release its own first attempt published).
@@ -12,6 +12,8 @@
 #                the previous release (CI, docs, tests or bench only) nothing is sent.
 #   sync-failed  oklabs-sync failed or was cancelled: a merge conflict (read from
 #                $SYNC_RESULT, which sync.sh writes) or any other failure, with the run URL.
+#   autoresolve-pr  the auto-resolver on baldr pushed oklabs/auto-resolve/<sha10>: the PR
+#                (opened by oklabs-autoresolve-pr.yml), conflicted files; merge is Oleg's.
 #   test         the release-ok text for the current latest release, marked [TEST].
 #                The only kind that exits 1 when the message was not delivered.
 #
@@ -20,6 +22,8 @@
 #   release-ok: OKLABS_VERSION, OKLABS_TAG, UPSTREAM_SHA (Version step), PREV_TAG
 #   (prev-tag), CHECK_OUTCOME (the download check after publish).
 #   sync-failed: SYNC_RESULT, DRY_RUN, JOB_STATUS.
+#   autoresolve-pr: PR_URL, PR_STATE (new|existing), UPSTREAM_SHA, UPSTREAM_SUBJECT,
+#   CONFLICTED (space-separated paths).
 # The token goes from the environment straight into the request URL. Nothing here
 # prints it, and GitHub masks secrets in logs.
 # Runs on the macOS (bash 3.2, BSD tools) and Ubuntu runners.
@@ -223,7 +227,8 @@ sync_failed() {
 Merge Beingpax main <code>$(esc "${upstream:0:10}")</code> $(esc "$(cut_to "$subject" 90)") требует разрешения конфликта.
 Файлы: ${files:-не определены, см. run}
 Ничего не pushed, latest release прежний.
-Fix локально (.oklabs/README.md, раздел Sync):
+Auto-resolver на baldr (voiceink-oklabs-autoresolve, 02:30 UTC и каждые 6 h) попробует разрешить сам и откроет PR; придёт отдельное сообщение. Если он не справится, тоже придёт сообщение.
+Fix вручную (.oklabs/README.md, раздел Sync):
 <pre>git fetch origin &amp;&amp; git fetch upstream
 git switch -c fix/upstream-sync origin/main
 git merge upstream/main</pre>
@@ -235,6 +240,20 @@ ${error:+$(esc "$(cut_to "$error" 300)")
 }Run: <a href=\"$RUN_URL\">$RUN_URL</a>"
     fi
     send "$text" || true
+}
+
+autoresolve_pr() {
+    local files="" n=0 f
+    for f in ${CONFLICTED:-}; do
+        n=$((n + 1))
+        if [ "$n" -le 10 ]; then files="${files:+$files, }<code>$(esc "$f")</code>"; fi
+    done
+    if [ "$n" -gt 10 ]; then files="$files, +$((n - 10))"; fi
+    send "<b>${LABEL:+[$LABEL] }VoiceInk sync: конфликт разрешён агентом</b>
+Merge Beingpax main <code>$(esc "${UPSTREAM_SHA:0:10}")</code> $(esc "$(cut_to "${UPSTREAM_SUBJECT:-}" 90)").
+Файлы: ${files:-см. PR}
+PR${PR_STATE:+ ($(esc "$PR_STATE"))}: <a href=\"$(esc "${PR_URL:-}")\">$(esc "${PR_URL:-}")</a>
+Checks (oklabs-test: swift test, compile app) идут на этом PR. Merge вручную после review resolution в PR, merge commit (без squash/rebase). После merge release соберётся сам." || true
 }
 
 test_msg() {
@@ -256,7 +275,8 @@ case $KIND in
     prev-tag) prev_tag "${GITHUB_SHA:-HEAD}" ;;
     release-ok) release_ok ;;
     sync-failed) sync_failed ;;
+    autoresolve-pr) autoresolve_pr ;;
     test) test_msg || exit 1 ;;
-    *) echo "usage: notify.sh prev-tag | release-ok | sync-failed | test" >&2; exit 64 ;;
+    *) echo "usage: notify.sh prev-tag | release-ok | sync-failed | autoresolve-pr | test" >&2; exit 64 ;;
 esac
 exit 0

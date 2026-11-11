@@ -14,7 +14,7 @@ managed mode, Developer ID builds on GitHub Actions, and no Sparkle.
 | `Package.swift`, `Tests/ScribeCoreTests`, `Tests/ScribeBenchKitTests`, `Tests/OKLabsVocabularyTests`, `Tests/OKLabsUpdaterTests` | `swift test`: unit tests, mock WebSocket scenarios, and production vocabulary/updater fork regressions |
 | `.oklabs/scribe-bench/` | `scribe-bench`, the real-voice harness (aggregate numbers only) |
 | `.oklabs/ci/` | keychain, archive, notarize, package, bench, sync and Telegram notify scripts |
-| `.github/workflows/oklabs-*.yml` | `oklabs-test`, `oklabs-release`, `oklabs-sync` |
+| `.github/workflows/oklabs-*.yml` | `oklabs-test`, `oklabs-release`, `oklabs-sync`, `oklabs-autoresolve-pr`, `oklabs-verify-release` |
 
 Branches: `upstream` mirrors Beingpax `main`; `main` preserves OKLabs history and merges upstream updates.
 
@@ -91,7 +91,26 @@ preserved. macOS may request permission once when switching from an ad-hoc build
   the last good release stays `latest`. Manual runs take `dry_run` (merge preview without
   pushing or running candidate validation) and a test-only `upstream_ref` (`owner/repo:ref`).
 
-  Recover a real conflict on a branch from current `origin/main`: fetch both remotes, merge
+  **Auto-resolve.** A conflict is first tried by `voiceink-oklabs-autoresolve` on baldr (user
+  timer 02:30, 08:30, 14:30, 20:30 UTC; GitHub-hosted runners cannot reach the LAN model proxy).
+  It merges Beingpax `main` into `origin/main` in a scratch worktree, lets Claude Code
+  (`~/.local/bin/oklabs-agent`, CLIProxyAPI on maestro) resolve the conflicted files and then
+  review the result in a second pass, and enforces guards the agent cannot change: the final
+  tree may differ from `git merge-tree --write-tree` only in the conflicted paths, no conflict
+  markers, then `check-fork-contracts.py` with its manifest from the old `main`, `tests/sync.sh`
+  and the fork guard unittests. It pushes one merge commit to `oklabs/auto-resolve/<upstream sha10>`
+  with the deploy key «baldr voiceink-autoresolve» (write, this repo only). That push starts
+  `oklabs-test` (swift test, app compile), and `oklabs-autoresolve-pr.yml` opens the PR to `main`
+  with the agent's explanation and sends Telegram. **Nothing merges automatically**: review the
+  resolution and merge with a merge commit. One attempt per upstream commit; a clean merge, an
+  upstream already in `main` or an existing branch is a quiet exit. On failure nothing is pushed
+  and Telegram gets «VoiceInk auto-resolve не справился» with the log path on baldr
+  (`~/.local/state/voiceink-oklabs/runs/<run>.log`). Retry an upstream commit:
+  `rm ~/.local/state/voiceink-oklabs/attempted/<sha>` on baldr, then
+  `systemctl --user start voiceink-oklabs-autoresolve.service`. Preview without push or message:
+  `voiceink-oklabs-autoresolve --dry-run`.
+
+  Recover a real conflict manually on a branch from current `origin/main`: fetch both remotes, merge
   `upstream/main`, resolve and validate, then open a PR. **Merge that PR with a merge commit**
   so the upstream ancestry and conflict resolution are retained; do not squash or rebase it.
   Run the sync workflow after the PR merge to fast-forward the `upstream` mirror if needed.
@@ -127,13 +146,16 @@ message that cannot be delivered is a warning in the log and never fails a job.
 |---|---|
 | `oklabs-release` published a build | «Новая сборка VoiceInk `<version>`», one line on what changed since the previous release on another commit (upstream +N commits with their subjects, new fork commits, changed build inputs), the update command below, the release link. Sent even if the download check after publish failed, with a line saying so |
 | any `oklabs-release` job failed or was cancelled | «VoiceInk release упал», the job results, the run URL |
-| `oklabs-sync` merge conflict | «VoiceInk sync: конфликт с upstream», the incoming upstream commit, conflicting files, merge recovery commands and the run URL |
+| `oklabs-sync` merge conflict | «VoiceInk sync: конфликт с upstream», the incoming upstream commit, conflicting files, a note that the auto-resolver on baldr will try, manual merge recovery commands and the run URL |
+| auto-resolver pushed `oklabs/auto-resolve/<sha10>` | «VoiceInk sync: конфликт разрешён агентом» from `oklabs-autoresolve-pr`: upstream commit, files, the PR link; checks run on the PR, merge is manual |
+| auto-resolver failed (baldr) | «VoiceInk auto-resolve не справился»: reason, nothing pushed, the `ssh baldr tail` command for the run log |
 | any other `oklabs-sync` failure, timeout or cancel | «VoiceInk sync упал», the failing command or the cancel, the run URL (a fallback text if even the checkout failed) |
 | no-op night, clean sync, dry run without a conflict | nothing |
 
 A push whose diff since the previous release touches only CI, docs, tests or the bench
 (`.github/`, `*.md`, `Tests/`, `Package.swift`, `.oklabs/scribe-bench/`, `sync.sh`,
-`notify.sh`) is still released but not announced. Build inputs in `oklabs-release.yml`
+`notify.sh`) is still released but not announced. A push that touches only docs,
+`oklabs-sync.yml`, `oklabs-autoresolve-pr.yml`, `sync.sh` or `notify.sh` is not released at all. Build inputs in `oklabs-release.yml`
 (`DEVELOPER_DIR`, `WHISPER_TAG`, `SIGN_IDENTITY`, `TEAM_ID`) count as app changes. Manual
 release runs are always announced. A re-run compares with the newest release on another
 commit, never with the release its own first attempt published.
