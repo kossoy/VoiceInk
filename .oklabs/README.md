@@ -45,6 +45,25 @@ Detect Speakers. Measure on a saved meeting without the app: `.oklabs/diarizatio
 It needs the FluidAudio `Diarizer` package trait in `project.pbxproj` (fork contract):
 with `traits = ( )` Xcode 26+ compiles FluidAudio without its diarizer.
 
+Optional cloud refinement ("Refine with ElevenLabs" in the meeting window; persisted as
+`oklabs.meeting.scribeDiarization`, unset = on when an ElevenLabs key is configured): after the
+local pass succeeds, the same stitched system track is uploaded once to `scribe_v3` with
+`diarize=true` and word timestamps (`MeetingRuntime/MeetingScribeDiarizer.swift`,
+`ScribeCore/ScribeDiarization.swift`; the API takes files under 5 GB and splits long audio
+itself, so one request keeps `speaker_id` consistent). Each cloud speaker is mapped to the local
+cluster it overlaps most (over 60 % of its time, at least 2 s; otherwise ignored). The cloud
+words then (a) give a voice to lines the local pass left without one (one mapped voice holds at
+least 60 % of the line's words) and (b) split a line between two voices by word, aligning the
+line's own text to the cloud words (at least half aligned; each of the two voices at least 25 %
+and 3 words; stray words join their neighbours). Local cluster IDs, Speaker N numbering, user
+names and meeting-app cue names stay authoritative; a per-line user name keeps the line whole.
+Raw cloud words with speaker labels go to `diarization-scribe.json` beside `diarization.json`
+(no audio, no embeddings); exports show a split line as one entry per voice, and
+`transcript.json` adds `parts`. It never blocks Stop; on failure the local result stays.
+The log (`OKLabsMeetingScribe`) records the billed minutes (stitched track incl. 0.5 s gaps).
+Measure on a saved meeting: `swift run meeting-scribe-bench <session-dir> <fluid-turns.json>`,
+with the turns from `DIARIZATION_BENCH_TURNS=<file>` and `.oklabs/diarization-bench`.
+
 After a capture change, measure echo reduction using speech played by another app through
 the real speaker route, then check local-only speech, double talk, headphones, pause/resume,
 and stop. Confirm the system track remains present and local words survive overlap.

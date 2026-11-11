@@ -1,31 +1,53 @@
 import Foundation
 
 public enum MeetingTranscriptExport {
-    public static func text(_ session: MeetingSession, diarization: MeetingDiarization? = nil) -> String {
-        let labeler = MeetingSpeakerLabeler(session: session, diarization: diarization)
-        return session.finalSegments.map { segment in
-            "[\(timestamp(segment.range.start))] \(labeler.label(for: segment)): \(segment.text)"
+    /// (label, text) per displayed line: a line split between two voices becomes one entry per voice.
+    static func lines(_ segment: MeetingTranscriptSegment, _ labeler: MeetingSpeakerLabeler) -> [(String, String)] {
+        if let parts = labeler.parts(for: segment) { return parts.map { (labeler.label(for: $0), $0.text) } }
+        return [(labeler.label(for: segment), segment.text)]
+    }
+
+    public static func text(
+        _ session: MeetingSession, diarization: MeetingDiarization? = nil, scribe: MeetingScribeDiarization? = nil
+    ) -> String {
+        let labeler = MeetingSpeakerLabeler(session: session, diarization: diarization, scribe: scribe)
+        return session.finalSegments.flatMap { segment in
+            lines(segment, labeler).map { "[\(timestamp(segment.range.start))] \($0.0): \($0.1)" }
         }.joined(separator: "\n")
     }
 
-    public static func markdown(_ session: MeetingSession, diarization: MeetingDiarization? = nil) -> String {
-        let labeler = MeetingSpeakerLabeler(session: session, diarization: diarization)
+    public static func markdown(
+        _ session: MeetingSession, diarization: MeetingDiarization? = nil, scribe: MeetingScribeDiarization? = nil
+    ) -> String {
+        let labeler = MeetingSpeakerLabeler(session: session, diarization: diarization, scribe: scribe)
         let title = session.title.components(separatedBy: .newlines).joined(separator: " ")
-        let paragraphs = session.finalSegments.map { segment in
-            "**[\(timestamp(segment.range.start))] \(labeler.label(for: segment))**\n\n\(segment.text)"
+        let paragraphs = session.finalSegments.flatMap { segment in
+            lines(segment, labeler).map { "**[\(timestamp(segment.range.start))] \($0.0)**\n\n\($0.1)" }
         }
         return (["# \(title)"] + paragraphs).joined(separator: "\n\n") + "\n"
     }
 
-    /// JSON is a raw, structured transcript; partial hypotheses are excluded.
-    public static func json(_ session: MeetingSession, diarization: MeetingDiarization? = nil) throws -> Data {
-        let labeler = MeetingSpeakerLabeler(session: session, diarization: diarization)
+    /// JSON is a raw, structured transcript; partial hypotheses are excluded. A line split between
+    /// voices keeps its own text and adds `parts`.
+    public static func json(
+        _ session: MeetingSession, diarization: MeetingDiarization? = nil, scribe: MeetingScribeDiarization? = nil
+    ) throws -> Data {
+        let labeler = MeetingSpeakerLabeler(session: session, diarization: diarization, scribe: scribe)
         return try encoder().encode(session.finalSegments.map {
             ExportedSegment(
                 id: $0.id, start: $0.range.start, end: $0.range.end, source: $0.source,
-                speaker: labeler.label(for: $0), speakerCluster: labeler.clusterID(for: $0), text: $0.text
+                speaker: labeler.label(for: $0), speakerCluster: labeler.clusterID(for: $0), text: $0.text,
+                parts: labeler.parts(for: $0)?.map {
+                    ExportedPart(speaker: labeler.label(for: $0), speakerCluster: $0.clusterID, text: $0.text)
+                }
             )
         })
+    }
+
+    private struct ExportedPart: Encodable {
+        let speaker: String
+        let speakerCluster: String?
+        let text: String
     }
 
     private struct ExportedSegment: Encodable {
@@ -36,6 +58,7 @@ public enum MeetingTranscriptExport {
         let speaker: String
         let speakerCluster: String?
         let text: String
+        let parts: [ExportedPart]?
     }
 
     static func encoder() -> JSONEncoder {
@@ -91,6 +114,28 @@ public struct MeetingTranscriptStore {
         try refreshExports(session, in: directory)
     }
 
+    /// Writes diarization-scribe.json (the optional cloud pass) and refreshes the exports with it.
+    public func saveScribeDiarization(_ scribe: MeetingScribeDiarization, for session: MeetingSession) throws {
+        try scribe.validate()
+        try session.validate()
+        let directory = directory(for: session.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try MeetingTranscriptExport.encoder().encode(scribe)
+            .write(to: directory.appendingPathComponent("diarization-scribe.json"), options: .atomic)
+        try refreshExports(session, in: directory)
+    }
+
+    /// nil when the cloud pass did not run for this session.
+    public func loadScribeDiarization(id: UUID) throws -> MeetingScribeDiarization? {
+        let url = directory(for: id).appendingPathComponent("diarization-scribe.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .deferredToDate
+        let scribe = try decoder.decode(MeetingScribeDiarization.self, from: Data(contentsOf: url))
+        try scribe.validate()
+        return scribe
+    }
+
     /// nil when the session has no diarization yet. A damaged file is reported, not ignored.
     public func loadDiarization(id: UUID) throws -> MeetingDiarization? {
         let url = directory(for: id).appendingPathComponent("diarization.json")
@@ -115,11 +160,12 @@ public struct MeetingTranscriptStore {
     private func refreshExports(_ session: MeetingSession, in directory: URL) throws {
         // A damaged diarization.json must not block saving the transcript: export without it.
         let diarization = try? loadDiarization(id: session.id)
-        try MeetingTranscriptExport.text(session, diarization: diarization).write(
+        let scribe = (try? loadScribeDiarization(id: session.id)) ?? nil
+        try MeetingTranscriptExport.text(session, diarization: diarization, scribe: scribe).write(
             to: directory.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
-        try MeetingTranscriptExport.markdown(session, diarization: diarization).write(
+        try MeetingTranscriptExport.markdown(session, diarization: diarization, scribe: scribe).write(
             to: directory.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
-        try MeetingTranscriptExport.json(session, diarization: diarization).write(
+        try MeetingTranscriptExport.json(session, diarization: diarization, scribe: scribe).write(
             to: directory.appendingPathComponent("transcript.json"), options: .atomic)
     }
 }
