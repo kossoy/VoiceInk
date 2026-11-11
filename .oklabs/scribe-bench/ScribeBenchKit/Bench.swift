@@ -16,12 +16,16 @@ public struct BenchOptions: Equatable, Sendable {
     public var abBuffer = 512
     public var realtimeCount = 3
     public var language: String?
+    /// Live model under test (`scribe_v3_live` by default) and the batch reference model.
+    public var model = ScribeLimits.realtimeModel
+    public var batchModel = ScribeModels.batchV2
 
     public init() {}
 
     public static let usage = """
         usage: scribe-bench [--recordings DIR] [--refs FILE] [--keyterms FILE] [--limit N]
                             [--ab N] [--ab-rate HZ] [--ab-buffer FRAMES] [--realtime N] [--language CODE]
+                            [--model LIVE_ID] [--batch-model BATCH_ID]
 
         Streams every .wav/.m4a/.caf/.aiff/.mp3 in DIR (default: Raycast's dictation-recordings) through the
         VoiceInk OKLabs Scribe engine and prints aggregate WER, Latin-term retention,
@@ -35,6 +39,8 @@ public struct BenchOptions: Equatable, Sendable {
                            signal. Raycast's recordings are 16 kHz and cannot show aliasing; use
                            44.1/48 kHz recordings (e.g. QuickTime Player audio) in a separate --recordings run
           --realtime N     stream the first N files at 1x to measure live stop-to-text latency (default 3)
+          --model ID       live model under test (default scribe_v3_live; scribe_v2_realtime for the old one)
+          --batch-model ID batch model used as the reference without --refs (default scribe_v2)
         """
 
     public enum ParseError: Error, LocalizedError, Equatable {
@@ -82,6 +88,8 @@ public struct BenchOptions: Equatable, Sendable {
                 options.abBuffer = frames
             case "--realtime": options.realtimeCount = try int(argument)
             case "--language": options.language = try value(argument)
+            case "--model": options.model = try value(argument)
+            case "--batch-model": options.batchModel = try value(argument)
             case "-h", "--help": throw ParseError.help
             default: throw ParseError.unknown(argument)
             }

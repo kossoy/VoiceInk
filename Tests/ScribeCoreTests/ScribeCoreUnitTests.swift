@@ -240,13 +240,45 @@ final class URLTests: XCTestCase {
         }
     }
 
+    func testRealtimeModelFollowsTheSelectedScribeModel() {
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v3"), "scribe_v3_live")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v2"), "scribe_v2_realtime")
+        // No live medical model: ElevenLabs points live medical audio to v2 Realtime.
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v2_medical"), "scribe_v2_realtime")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: " Scribe_V2 "), "scribe_v2_realtime")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: nil), "scribe_v3_live")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "something-new"), "scribe_v3_live")
+        XCTAssertEqual(ScribeLimits.realtimeModel, "scribe_v3_live")
+    }
+
+    func testRealtimeModelOverrideWins() {
+        XCTAssertEqual(
+            ScribeModels.realtimeModel(forSelected: "scribe_v3", override: "scribe_v2_realtime"), "scribe_v2_realtime")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v2", override: "  "), "scribe_v2_realtime")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v3", override: nil), "scribe_v3_live")
+    }
+
+    func testMeetingsMoveScribeV2UpToV3() {
+        XCTAssertEqual(ScribeModels.meetingBatchModel(forSelected: "scribe_v2"), "scribe_v3")
+        XCTAssertEqual(ScribeModels.meetingBatchModel(forSelected: "scribe_v3"), "scribe_v3")
+        XCTAssertEqual(ScribeModels.meetingBatchModel(forSelected: "scribe_v2_medical"), "scribe_v2_medical")
+    }
+
+    func testV2RealtimeURLStillBuilds() throws {
+        let url = try ScribeURL.build(
+            endpoint: ScribeLimits.defaultEndpoint, model: ScribeModels.realtimeV2, language: nil, keyterms: ["T3 Code"])
+        let items = query(url)
+        XCTAssertTrue(items.contains { $0 == ("model_id", "scribe_v2_realtime") })
+        XCTAssertTrue(items.contains { $0 == ("commit_strategy", "manual") })
+    }
+
     func testCarriesSettingsLanguageAndFiftyKeyterms() throws {
         let url = try ScribeURL.build(
             endpoint: ScribeLimits.defaultEndpoint, language: "he", keyterms: ["T3 Code", "a+b"] + sampleKeyterms.dropLast(2))
         let items = query(url)
         XCTAssertEqual(url.scheme, "wss")
         XCTAssertEqual(url.path, "/v1/speech-to-text/realtime")
-        XCTAssertTrue(items.contains { $0 == ("model_id", "scribe_v2_realtime") })
+        XCTAssertTrue(items.contains { $0 == ("model_id", "scribe_v3_live") })
         XCTAssertTrue(items.contains { $0 == ("audio_format", "pcm_16000") })
         XCTAssertTrue(items.contains { $0 == ("commit_strategy", "manual") })
         XCTAssertTrue(items.contains { $0 == ("no_verbatim", "true") })

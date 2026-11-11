@@ -45,6 +45,14 @@ t = Date()
 let result = try await manager.process(audio: samples)
 let elapsed = Date().timeIntervalSince(t)
 print(String(format: "diarized in %.1f s (%.0fx realtime), %d turns", elapsed, Double(samples.count) / 16_000 / elapsed, result.segments.count))
+// DIARIZATION_BENCH_TURNS=FILE: also write the turns on the stitched timeline (speaker, start, end
+// in seconds) as JSON, e.g. to compare with ElevenLabs Scribe diarization of the same stitched audio.
+if let path = ProcessInfo.processInfo.environment["DIARIZATION_BENCH_TURNS"], !path.isEmpty {
+    let rows = result.segments.map {
+        ["speaker": $0.speakerId, "start": Double($0.startTimeSeconds), "end": Double($0.endTimeSeconds)] as [String: Any]
+    }
+    try JSONSerialization.data(withJSONObject: rows).write(to: URL(fileURLWithPath: path), options: .atomic)
+}
 var perSpeaker: [String: Double] = [:]
 var turns: [(id: String, start: Double, end: Double)] = []
 for s in result.segments {

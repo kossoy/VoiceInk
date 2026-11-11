@@ -53,8 +53,18 @@ final class MeetingCoordinator: ObservableObject {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("com.prakashjoshipax.VoiceInk/Meetings", isDirectory: true)
         store = MeetingTranscriptStore(root: root)
-        selectedModelKey = models.currentTranscriptionModel?.selectionKey ?? ""
+        selectedModelKey = Self.defaultModelKey(models)
         refreshSavedMeetings()
+    }
+
+    /// The dictation model, except that ElevenLabs Scribe V2 is upgraded to Scribe V3 for
+    /// meetings when V3 is usable. A model picked in the meeting window is kept as is.
+    static func defaultModelKey(_ models: TranscriptionModelManager) -> String {
+        guard let current = models.currentTranscriptionModel else { return "" }
+        guard current.provider == .elevenLabs else { return current.selectionKey }
+        let wanted = ScribeModels.meetingBatchModel(forSelected: current.name)
+        let upgraded = models.usableModels.first { $0.provider == .elevenLabs && $0.name == wanted }
+        return (upgraded ?? current).selectionKey
     }
 
     var hasOpenCapture: Bool { session.map { $0.state != .finished } ?? false }

@@ -89,7 +89,12 @@ final class OptionsTests: XCTestCase {
         let options = try BenchOptions.parse([
             "--recordings", "/tmp/r", "--refs", "/tmp/refs.jsonl", "--limit", "5", "--ab", "0", "--ab-rate", "44100",
             "--ab-buffer", "256", "--realtime", "1", "--language", "he",
+            "--model", "scribe_v2_realtime", "--batch-model", "scribe_v3",
         ])
+        XCTAssertEqual(options.model, "scribe_v2_realtime")
+        XCTAssertEqual(options.batchModel, "scribe_v3")
+        XCTAssertEqual(BenchOptions().model, "scribe_v3_live")
+        XCTAssertEqual(BenchOptions().batchModel, "scribe_v2")
         XCTAssertEqual(options.recordings, "/tmp/r")
         XCTAssertEqual(options.refs, "/tmp/refs.jsonl")
         XCTAssertEqual(options.limit, 5)

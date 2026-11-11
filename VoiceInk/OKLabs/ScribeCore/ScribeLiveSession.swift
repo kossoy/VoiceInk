@@ -86,7 +86,7 @@ public final class ScribeSessionStatus: @unchecked Sendable {
 ///   single writer sends frames in order.
 /// - Any send error, a write that blocks for `sendStall`, a server error, or the
 ///   connection closing marks the session failed. The app then re-uploads the
-///   whole recording to batch `scribe_v2`.
+///   whole recording to the mode's batch model.
 /// - `finish()` sends the tail, padded so the final commit is never throttled,
 ///   and waits until every commit is answered, at most `finalWait` after the stop
 ///   request, stalled writes included.
