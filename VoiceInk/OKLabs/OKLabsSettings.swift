@@ -6,6 +6,12 @@ enum OKLabsSettings {
     enum Key {
         /// `oklabs` (default): the fork's Scribe engine. `upstream`: LLMkit's client.
         static let scribeEngine = "oklabs.scribeEngine"
+        /// Scribe model the managed "Scribe" mode is reset to on every launch: `scribe_v3`
+        /// (default), `scribe_v2` or `scribe_v2_medical`. The one switch back to V2.
+        static let scribeModel = "oklabs.scribeModel"
+        /// Realtime model id for the fork engine, e.g. `scribe_v2_realtime`. Empty (default):
+        /// derived from the mode's Scribe model (v3 -> `scribe_v3_live`, v2 -> `scribe_v2_realtime`).
+        static let scribeRealtimeModel = "oklabs.scribeRealtimeModel"
         /// Override for the realtime endpoint (tests, regional endpoints).
         static let scribeEndpoint = "oklabs.scribeEndpoint"
         /// Keyterms file: one term per line (`#` comments) or a JSON array. Goes first, in file order.
@@ -40,6 +46,26 @@ enum OKLabsSettings {
 
     static var usesForkScribeEngine: Bool {
         (UserDefaults.standard.string(forKey: Key.scribeEngine) ?? "oklabs").lowercased() != "upstream"
+    }
+
+    /// Literal ids (the same as `ScribeModels`): this file also builds in SwiftPM targets without ScribeCore.
+    static let defaultManagedScribeModel = "scribe_v3"
+    static let managedScribeModels: Set<String> = ["scribe_v3", "scribe_v2", "scribe_v2_medical"]
+
+    /// `oklabs.scribeModel` if it names a known batch Scribe model, else `scribe_v3`.
+    static var managedScribeModel: String {
+        let raw = UserDefaults.standard.string(forKey: Key.scribeModel)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return managedScribeModels.contains(raw) ? raw : defaultManagedScribeModel
+    }
+
+    static var scribeRealtimeModel: String? {
+        guard let raw = UserDefaults.standard.string(forKey: Key.scribeRealtimeModel)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
+        else {
+            return nil
+        }
+        return raw
     }
 
     static var scribeEndpoint: URL? {

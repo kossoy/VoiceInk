@@ -1,6 +1,6 @@
 import Foundation
 
-// OKLabs fork: ElevenLabs Scribe v2 Realtime engine, ported 1:1 from voxtype
+// OKLabs fork: ElevenLabs Scribe Realtime engine (v3 Live by default), ported 1:1 from voxtype
 // (`src/transcribe/elevenlabs.rs`). Foundation only, so the same files build in
 // the app target and in the root SwiftPM package (`swift test`).
 
@@ -8,10 +8,12 @@ import Foundation
 public enum ScribeLimits {
     public static let sampleRate = 16_000
     public static let audioFormat = "pcm_16000"
-    public static let realtimeModel = "scribe_v2_realtime"
+    /// Default realtime model. `ScribeModels` maps the selected Scribe model to its live twin.
+    public static let realtimeModel = ScribeModels.realtimeV3
     public static let defaultEndpoint = URL(string: "wss://api.elevenlabs.io/v1/speech-to-text/realtime")!
 
-    /// Realtime keyterm limits (batch allows more; realtime rejects these).
+    /// Realtime keyterm limits, the same for v2 Realtime and v3 Live (batch allows 1000 terms
+    /// of 50 characters; realtime rejects more). https://elevenlabs.io/docs/overview/capabilities/speech-to-text
     public static let maxKeyterms = 50
     public static let maxKeytermChars = 20
 
@@ -38,6 +40,40 @@ public enum ScribeLimits {
     public static let liveFinalWait: TimeInterval = 8
     /// A live frame that cannot be written for this long means the connection is stalled.
     public static let sendStall: TimeInterval = 2
+}
+
+/// Scribe model ids and how the fork picks the realtime one.
+///
+/// v3 (released 2026-11-10) keeps the v2 Realtime feature set on the same WebSocket,
+/// including manual commits and the 50 x 20 keyterm limits, so only `model_id` changes:
+/// https://elevenlabs.io/docs/overview/models#scribe-v3-live
+public enum ScribeModels {
+    public static let batchV2 = "scribe_v2"
+    public static let batchV3 = "scribe_v3"
+    public static let batchV2Medical = "scribe_v2_medical"
+    public static let realtimeV2 = "scribe_v2_realtime"
+    public static let realtimeV3 = "scribe_v3_live"
+
+    /// Live model for the mode's selected Scribe model. `override` (the
+    /// `oklabs.scribeRealtimeModel` setting) wins when set. v2 and v2 Medical stay on
+    /// v2 Realtime (ElevenLabs points live medical audio there); v3 and anything
+    /// unknown get v3 Live.
+    public static func realtimeModel(forSelected selected: String?, override: String? = nil) -> String {
+        if let forced = override?.trimmingCharacters(in: .whitespacesAndNewlines), !forced.isEmpty {
+            return forced
+        }
+        switch selected?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case batchV2, batchV2Medical, realtimeV2: return realtimeV2
+        default: return realtimeV3
+        }
+    }
+
+    /// Default batch model for a meeting when dictation runs on `selected`: plain
+    /// Scribe v2 moves up to v3 (27% fewer word errors, same price); other models,
+    /// Medical included, stay as they are.
+    public static func meetingBatchModel(forSelected selected: String) -> String {
+        selected == batchV2 ? batchV3 : selected
+    }
 }
 
 /// Session failure, classified like voxtype's `SessionError`.

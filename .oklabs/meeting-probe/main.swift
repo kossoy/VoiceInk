@@ -3,8 +3,9 @@ import ApplicationServices
 import Foundation
 import MeetingSystem
 
-// Read-only diagnostics. Never requests permissions, enables AX attributes, records audio,
-// performs AX actions, or guesses which participant is currently speaking.
+// Default mode: read-only diagnostics. Never requests permissions, enables AX attributes,
+// records audio or performs AX actions. Speaker modes (--wake/--watch/--dump-tree) live in
+// SpeakerProbe.swift; only --wake writes (two AX attributes on Teams processes).
 struct ProbeOptions {
     var includeLabels = false
     var maxNodes = 500
@@ -39,6 +40,7 @@ struct ProbeOptions {
             case "--help", "-h":
                 print("""
                 Usage: meeting-probe [--audio-only] [--window N] [--include-labels] [--max-nodes N] [--max-seconds N]
+                       meeting-probe [--wake] [--watch SECONDS] [--dump-tree FILE] [--redact] [--max-nodes N]
 
                 Inspect only Microsoft Teams desktop Accessibility windows.
                 Default: role/identifier/attribute metadata; label/title/value fields are omitted.
@@ -47,6 +49,11 @@ struct ProbeOptions {
                 Prints JSON to stdout. Does not write files, capture media, or change Teams.
                 An active call is required to investigate active-speaker signals.
                 --audio-only reads Teams CoreAudio IO activity without AX access, labels or recording.
+
+                Speaker modes (live call): --wake sets AXManualAccessibility/AXEnhancedUserInterface on
+                Teams processes (the only write). --watch polls 4 Hz and prints JSONL events
+                (speaking, roster, windows, cue). --dump-tree saves roles, DOM classes and
+                AXDescription/AXTitle labels (never AXValue or text fields). --redact hashes names.
                 """)
                 exit(0)
             default:
@@ -127,6 +134,10 @@ func inspect(_ app: NSRunningApplication, options: ProbeOptions) -> [String: Any
 }
 
 do {
+    let speakerArguments = Array(CommandLine.arguments.dropFirst())
+    if SpeakerProbeOptions.wants(speakerArguments) {
+        exit(try SpeakerProbe(options: SpeakerProbeOptions.parse(speakerArguments)).run())
+    }
     let options = try ProbeOptions.parse()
     if options.audioOnly {
         if #available(macOS 14.2, *) {

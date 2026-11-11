@@ -130,7 +130,19 @@ struct MeetingWindowView: View {
                                     speakerLabel(for: segment, labeler: labeler)
                                     Text(timestamp(segment.range.start)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                                 }
-                                Text(segment.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                                if let parts = labeler?.parts(for: segment) {
+                                    // Two voices in one line (ElevenLabs refinement): one run per voice.
+                                    ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(labeler?.label(for: part) ?? "Others").font(.caption.bold())
+                                                .foregroundStyle(.secondary)
+                                            Text(part.text).textSelection(.enabled)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                } else {
+                                    Text(segment.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
                             .padding(14)
                             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
@@ -227,10 +239,21 @@ struct MeetingWindowView: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                if meeting.isTranscribing || meeting.isDiarizing { ProgressView().controlSize(.small) }
+                if meeting.isTranscribing || meeting.isDiarizing || meeting.isRefiningSpeakers {
+                    ProgressView().controlSize(.small)
+                }
                 Text("\(meeting.pendingCount) pending · \(meeting.failedCount) failed").font(.caption)
                 if meeting.isDiarizing { Text("· Separating voices…").font(.caption).foregroundStyle(.secondary) }
+                if meeting.isRefiningSpeakers {
+                    Text("· Refining speakers with ElevenLabs…").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
+                Toggle("Refine with ElevenLabs", isOn: $meeting.scribeDiarizationEnabled)
+                    .toggleStyle(.checkbox).font(.caption)
+                    .disabled(!MeetingScribeDiarizer.hasAPIKey)
+                    .help(MeetingScribeDiarizer.hasAPIKey
+                        ? "After the voices are separated on this Mac, send the audio from other apps once more to ElevenLabs Scribe v3 (billed as batch audio) to label short lines and split lines with two voices."
+                        : "Needs an ElevenLabs API key.")
                 if meeting.canDetectSpeakers {
                     Button(meeting.diarization == nil ? "Detect Speakers" : "Detect Speakers Again") {
                         meeting.detectSpeakers()
