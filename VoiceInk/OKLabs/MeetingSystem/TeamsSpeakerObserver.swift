@@ -6,36 +6,55 @@ import MeetingCore
 #endif
 
 // Teams active-speaker attribution through the Accessibility tree (the Granola approach):
-// Teams desktop shows "<Name> is speaking" and per-participant tiles; we read those labels
-// while a meeting recording runs and turn them into MeetingSpeakerCue ranges on the
-// session clock. Voices are not analysed here.
+// we read Teams desktop's own labels while a meeting recording runs and turn them into
+// MeetingSpeakerCue ranges on the session clock. Voices are not analysed here; the
+// diarization clusters get their names from these cues by majority vote
+// (MeetingSpeakerNaming).
 //
-// STATUS: selectors are UNCONFIRMED. They come from public reverse engineering of
-// Teams 2 (see TeamsAXSelectors) and must be verified on a live call with
-// `.oklabs/meeting-probe --watch`. The observer is off unless the user default
-// `oklabs.meeting.teamsSpeakerObserver` is true.
+// Verified on a live call (Teams 26289.204, 2026-11-11, 3+ participants):
+// - "<Name> is speaking" exists only in the "Meeting compact view" window, which Teams shows
+//   while the main call window is not in front. While it was up, the label named someone
+//   95% of the time; the main call window never carries it.
+// - Main-window tiles are AXMenuItem "Last, First, [video is on,] Has control of production
+//   tools, [muted,] Context menu is available"; the own tile starts with "Myself video".
+//   One AXEmptyGroup with DOM class vdi-frame-occlusion sits in the gallery; whether it is
+//   the active-speaker frame, and which tile owns it, is NOT confirmed yet (needs a capture
+//   with tree paths: `meeting-probe --watch` now reports it as "tileFrame").
+// - The web tree is exposed without waking: AXManualAccessibility/AXEnhancedUserInterface
+//   writes fail (-25205/-25208) and are not needed, so the observer never writes to Teams.
+//
+// Off unless the user default `oklabs.meeting.teamsSpeakerObserver` is true.
 
 /// Every Teams-specific string the observer matches, in one place.
 public enum TeamsAXSelectors {
     /// Teams 2 main app and its WebView/helper processes.
     public static let bundlePrefixes = ["com.microsoft.teams2", "com.microsoft.teams"]
-    /// Label suffixes announcing the active speaker, e.g. "Alex Smith is speaking".
-    public static let speakingSuffixes = [" is speaking", ", speaking", " is talking"]
-    /// DOM class Teams puts on the gallery tile of the participant who talks.
+    /// Label suffixes announcing the active speaker, e.g. "Alex Smith is speaking" (verified).
+    public static let speakingSuffixes = [" is speaking", ", speaking"]
+    /// Window that carries the speaking label; title "Meeting compact view | <meeting title>".
+    public static let compactViewTitlePrefix = "Meeting compact view"
+    /// Gallery frame class. Unconfirmed as the active-speaker frame; used only when the frame
+    /// sits inside a tile.
     public static let speakingTileDOMClasses = ["vdi-frame-occlusion"]
-    /// Roles that carry the speaking label or the tile.
-    public static let speakingRoles: Set<String> = ["AXGroup", "AXMenuItem", "AXButton", "AXStaticText"]
-    /// Window of the floating call view while sharing the screen.
-    public static let compactViewTitles = ["Meeting compact view"]
-    public static let compactViewSubrole = "AXSystemDialog"
-    /// Parenthesised tags and comma-separated status words Teams appends to names.
+    /// Participant tiles in the main call window (verified).
+    public static let tileRole = "AXMenuItem"
+    /// The user's own tile label starts with this part (verified).
+    public static let selfTilePrefix = "myself video"
+    /// Comma-separated tile parts that describe state, not the name (verified + likely variants).
+    public static let tileStatusFragments = ["control of production tools", "menu is available", "context menu",
+                                             "video is on", "video is off", "muted", "unmuted", "camera",
+                                             "hand raised", "is presenting", "pinned", "spotlighted", "speaking"]
+    /// Parenthesised tags Teams appends to names.
     public static let nameTags = ["guest", "unverified", "external", "organizer", "organiser", "presenter",
                                   "attendee", "you", "me"]
+    /// Trailing comma-separated status words on names in labels and the People pane.
     public static let nameStatusWords = ["meeting guest", "unmuted", "muted", "organizer", "organiser",
                                          "presenter", "attendee", "hand raised", "camera on", "camera off",
-                                         "video on", "video off", "speaking", "external", "guest", "unverified",
-                                         "in this meeting", "has left", "pinned", "spotlighted"]
-    /// Accessibility attributes that switch on the Chromium/WebView tree.
+                                         "video on", "video off", "video is on", "video is off", "speaking",
+                                         "external", "guest", "unverified", "in this meeting", "has left",
+                                         "pinned", "spotlighted"]
+    /// Attributes that ask Chromium-based apps to expose their web tree. Teams 2 rejects them
+    /// and exposes the tree anyway; kept for the probe's --wake diagnostics only.
     public static let wakeAttributes = ["AXManualAccessibility", "AXEnhancedUserInterface"]
     /// Attributes read from each node. AXValue is deliberately absent: it carries chat text.
     public static let labelAttributes = ["AXDescription", "AXTitle"]
@@ -44,13 +63,17 @@ public enum TeamsAXSelectors {
     public static let skippedRoles: Set<String> = ["AXTextArea", "AXTextField", "AXComboBox", "AXMenu", "AXMenuBar"]
 }
 
-/// Pure label parsing, unit-tested against recorded strings.
+/// Pure label parsing, unit-tested against strings recorded on a live call (names replaced).
 public enum TeamsSpeakerParser {
     public static func isTeamsBundle(_ id: String) -> Bool {
         TeamsAXSelectors.bundlePrefixes.contains { id == $0 || id.hasPrefix($0 + ".") }
     }
 
-    /// "Alex Smith (Guest) is speaking" -> "Alex Smith"; nil when the label announces nobody.
+    public static func isCompactView(_ windowTitle: String?) -> Bool {
+        windowTitle?.hasPrefix(TeamsAXSelectors.compactViewTitlePrefix) ?? false
+    }
+
+    /// "Doe, Jane is speaking" -> "Doe, Jane"; nil when the label announces nobody.
     public static func speakingName(fromLabel label: String) -> String? {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         for suffix in TeamsAXSelectors.speakingSuffixes {
@@ -62,11 +85,9 @@ public enum TeamsSpeakerParser {
     }
 
     /// Strips Teams decorations: "(Guest)", "(Unverified)", ", Meeting guest", ", Unmuted", …
-    /// Keeps the person's own words, including commas in "Smith, Alex" when the remainder is not
-    /// a known status word.
+    /// Keeps "Last, First" commas when the remainder is not a known status word.
     public static func normalizeName(_ raw: String) -> String {
         var name = raw.replacingOccurrences(of: "\u{00A0}", with: " ")
-        // Parenthesised tags anywhere: "Alex (Guest)", "Alex (Unverified) (External)".
         while let open = name.range(of: "(", options: .backwards),
             let close = name.range(of: ")", range: open.upperBound..<name.endIndex)
         {
@@ -74,7 +95,6 @@ public enum TeamsSpeakerParser {
             guard TeamsAXSelectors.nameTags.contains(tag) || tag.isEmpty else { break }
             name.removeSubrange(open.lowerBound..<close.upperBound)
         }
-        // Trailing ", <status>" parts.
         var parts = name.components(separatedBy: ",")
         while parts.count > 1,
             TeamsAXSelectors.nameStatusWords.contains(parts.last!.trimmingCharacters(in: .whitespaces).lowercased())
@@ -83,6 +103,29 @@ public enum TeamsSpeakerParser {
         }
         name = parts.joined(separator: ",")
         return name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// Main-window tile label -> participant name; nil for the user's own tile and non-tiles.
+    /// "Doe, Jane, video is on, Has control of production tools, muted, Context menu is available"
+    /// -> "Doe, Jane".
+    public static func tileName(fromLabel label: String) -> String? {
+        let parts = label.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let first = parts.first, !first.lowercased().hasPrefix(TeamsAXSelectors.selfTilePrefix) else {
+            return nil
+        }
+        let nameParts = parts.prefix { part in
+            let lower = part.lowercased()
+            return !part.isEmpty && !TeamsAXSelectors.tileStatusFragments.contains { lower.contains($0) }
+        }
+        // A tile always has at least one status part; a label without any is not a tile.
+        guard !nameParts.isEmpty, nameParts.count < parts.count else { return nil }
+        let name = normalizeName(nameParts.joined(separator: ", "))
+        return name.isEmpty ? nil : name
+    }
+
+    /// Whether a tile label says the participant's mic is muted.
+    public static func tileIsMuted(_ label: String) -> Bool {
+        label.components(separatedBy: ",").contains { $0.trimmingCharacters(in: .whitespaces).lowercased() == "muted" }
     }
 
     /// Roster row label from the People pane -> participant name, nil for headers/buttons.
@@ -108,50 +151,70 @@ public struct TeamsAXNode: Equatable, Sendable {
     public var labels: [String]
     public var domClasses: [String]
     public var windowTitle: String?
+    /// First label of the nearest AXMenuItem ancestor (the tile this node belongs to).
+    public var tileLabel: String?
+    public var depth: Int
 
     public init(role: String, subrole: String? = nil, labels: [String] = [], domClasses: [String] = [],
-                windowTitle: String? = nil) {
+                windowTitle: String? = nil, tileLabel: String? = nil, depth: Int = 0) {
         self.role = role
         self.subrole = subrole
         self.labels = labels
         self.domClasses = domClasses
         self.windowTitle = windowTitle
+        self.tileLabel = tileLabel
+        self.depth = depth
     }
 }
 
 /// What one poll saw.
 public struct TeamsSpeakerSnapshot: Equatable, Sendable {
+    /// Names Teams marks as speaking now.
     public var speaking: Set<String>
+    /// Participants whose tile is not muted (diagnostics; unmuted is not speaking).
+    public var unmuted: Set<String>
+    public var compactView: Bool
     public var fingerprint: Int
 
-    public init(speaking: Set<String>, fingerprint: Int) {
+    public init(speaking: Set<String>, unmuted: Set<String> = [], compactView: Bool = false, fingerprint: Int) {
         self.speaking = speaking
+        self.unmuted = unmuted
+        self.compactView = compactView
         self.fingerprint = fingerprint
     }
 
     public static func from(nodes: [TeamsAXNode]) -> TeamsSpeakerSnapshot {
         var speaking = Set<String>()
+        var unmuted = Set<String>()
+        var compact = false
         var hasher = Hasher()
         for node in nodes {
             hasher.combine(node.labels)
             hasher.combine(node.domClasses)
-            guard TeamsAXSelectors.speakingRoles.contains(node.role) else { continue }
+            if TeamsSpeakerParser.isCompactView(node.windowTitle) { compact = true }
             for label in node.labels {
                 if let name = TeamsSpeakerParser.speakingName(fromLabel: label) { speaking.insert(name) }
             }
+            if node.role == TeamsAXSelectors.tileRole, let label = node.labels.first,
+                let name = TeamsSpeakerParser.tileName(fromLabel: label), !TeamsSpeakerParser.tileIsMuted(label)
+            {
+                unmuted.insert(name)
+            }
             if node.domClasses.contains(where: TeamsAXSelectors.speakingTileDOMClasses.contains),
-                let label = node.labels.first, let name = TeamsSpeakerParser.rosterName(fromLabel: label)
+                let tile = node.tileLabel, let name = TeamsSpeakerParser.tileName(fromLabel: tile)
             {
                 speaking.insert(name)
             }
         }
-        return TeamsSpeakerSnapshot(speaking: speaking, fingerprint: hasher.finalize())
+        return TeamsSpeakerSnapshot(speaking: speaking, unmuted: unmuted, compactView: compact,
+                                    fingerprint: hasher.finalize())
     }
 }
 
 /// Turns timed snapshots into cues: a speaker stays current for `hold` seconds after the last
-/// sighting, so flickering labels do not split one turn. A tree that has not changed for
-/// `staleAfter` seconds (Teams minimised, window frozen) stops extending cues.
+/// sighting, so flickering labels do not split one turn. A missing snapshot (Teams gone,
+/// tree unreadable) closes everything. `staleAfter` (off by default) closes cues when the
+/// whole tree stops changing; a long monologue in compact view legitimately looks frozen.
 public struct TeamsSpeakerTracker {
     public var hold: TimeInterval
     public var staleAfter: TimeInterval
@@ -159,7 +222,7 @@ public struct TeamsSpeakerTracker {
     private var lastFingerprint: Int?
     private var unchangedSince: TimeInterval?
 
-    public init(hold: TimeInterval = 2.5, staleAfter: TimeInterval = 20) {
+    public init(hold: TimeInterval = 2.5, staleAfter: TimeInterval = .infinity) {
         self.hold = hold
         self.staleAfter = staleAfter
     }
@@ -189,10 +252,12 @@ public struct TeamsSpeakerTracker {
         return closed.sorted { $0.range.start < $1.range.start }
     }
 
-    /// Close everything (recording stopped) at session time `t`.
+    /// Close everything (recording paused or stopped) at session time `t`.
     public mutating func finish(at t: TimeInterval) -> [MeetingSpeakerCue] {
         let cues = open.compactMap { Self.cue($0.key, $0.value.start, min($0.value.lastSeen + hold, t)) }
         open = [:]
+        lastFingerprint = nil
+        unchangedSince = nil
         return cues.sorted { $0.range.start < $1.range.start }
     }
 
@@ -209,7 +274,8 @@ public enum TeamsAXReader {
         NSWorkspace.shared.runningApplications.filter { TeamsSpeakerParser.isTeamsBundle($0.bundleIdentifier ?? "") }
     }
 
-    /// Asks Chromium/WebView to build its tree. The only write; returns attribute -> AXError per pid.
+    /// Probe diagnostics only: tries the wake attributes and returns attribute -> AXError per pid.
+    /// Teams 2 answers -25205/-25208 and exposes its tree regardless.
     @discardableResult
     public static func wake(_ apps: [NSRunningApplication]) -> [pid_t: [String: Int32]] {
         var result: [pid_t: [String: Int32]] = [:]
@@ -221,6 +287,20 @@ public enum TeamsAXReader {
             }
         }
         return result
+    }
+
+    public static func axErrorName(_ code: Int32) -> String {
+        switch code {
+        case 0: return "success"
+        case -25200: return "failure"
+        case -25201: return "illegalArgument"
+        case -25202: return "invalidUIElement"
+        case -25204: return "cannotComplete"
+        case -25205: return "attributeUnsupported"
+        case -25208: return "notImplemented"
+        case -25211: return "apiDisabled"
+        default: return "error\(code)"
+        }
     }
 
     public static func string(_ element: AXUIElement, _ name: String) -> String? {
@@ -246,12 +326,12 @@ public enum TeamsAXReader {
             guard let windows = value(root, kAXWindowsAttribute) as? [AXUIElement] else { continue }
             for window in windows {
                 let title = string(window, kAXTitleAttribute)
-                var queue = [window]
+                var queue: [(AXUIElement, String?, Int)] = [(window, nil, 0)]
                 var index = 0
                 while index < queue.count, out.count < maxNodes,
                     ProcessInfo.processInfo.systemUptime - started < maxSeconds
                 {
-                    let element = queue[index]
+                    let (element, tile, depth) = queue[index]
                     index += 1
                     AXUIElementSetMessagingTimeout(element, 0.03)
                     let role = string(element, kAXRoleAttribute) ?? ""
@@ -260,9 +340,11 @@ public enum TeamsAXReader {
                         .filter { !$0.isEmpty }
                     let classes = value(element, TeamsAXSelectors.domClassAttribute) as? [String] ?? []
                     out.append(TeamsAXNode(role: role, subrole: string(element, kAXSubroleAttribute),
-                                           labels: labels, domClasses: classes, windowTitle: title))
-                    if let children = value(element, kAXChildrenAttribute) as? [AXUIElement] {
-                        queue.append(contentsOf: children)
+                                           labels: labels, domClasses: classes, windowTitle: title,
+                                           tileLabel: tile, depth: depth))
+                    let childTile = role == TeamsAXSelectors.tileRole ? labels.first ?? tile : tile
+                    if depth < 64, let children = value(element, kAXChildrenAttribute) as? [AXUIElement] {
+                        queue.append(contentsOf: children.map { ($0, childTile, depth + 1) })
                     }
                 }
             }
@@ -271,8 +353,7 @@ public enum TeamsAXReader {
     }
 }
 
-/// Polls Teams while a meeting recording runs and reports closed cues.
-/// Disabled unless `UserDefaults[enabledKey]` is true (selectors still unconfirmed).
+/// Polls Teams while a meeting recording runs and reports closed cues. Read-only.
 @MainActor
 public final class TeamsSpeakerObserver {
     public static let enabledKey = "oklabs.meeting.teamsSpeakerObserver"
@@ -284,20 +365,21 @@ public final class TeamsSpeakerObserver {
     private var tracker: TeamsSpeakerTracker
     private var timer: Timer?
     private var clock: (() -> TimeInterval)?
-    private var onCue: ((MeetingSpeakerCue) -> Void)?
+    private var onCue: (@MainActor (MeetingSpeakerCue) -> Void)?
 
     /// `interval` 0.25–0.5 s (2–4 Hz).
-    public init(interval: TimeInterval = 0.33, tracker: TeamsSpeakerTracker = TeamsSpeakerTracker()) {
+    public init(interval: TimeInterval = 0.25, tracker: TeamsSpeakerTracker = TeamsSpeakerTracker()) {
         self.interval = min(max(interval, 0.25), 0.5)
         self.tracker = tracker
     }
 
+    public var isRunning: Bool { timer != nil }
+
     /// `clock` returns the session-relative time used by MeetingSession ranges.
-    public func start(clock: @escaping () -> TimeInterval, onCue: @escaping (MeetingSpeakerCue) -> Void) {
+    public func start(clock: @escaping () -> TimeInterval, onCue: @escaping @MainActor (MeetingSpeakerCue) -> Void) {
         guard timer == nil, AXIsProcessTrusted() else { return }
         self.clock = clock
         self.onCue = onCue
-        TeamsAXReader.wake(TeamsAXReader.teamsApplications())
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
@@ -305,6 +387,7 @@ public final class TeamsSpeakerObserver {
         self.timer = timer
     }
 
+    /// Stops polling and delivers the cues still open (call before pausing/finishing the session).
     public func stop() {
         timer?.invalidate()
         timer = nil

@@ -5,8 +5,9 @@ import Foundation
 import MeetingSystem
 
 // Speaker-attribution probe for a LIVE Teams call (selectors in TeamsAXSelectors).
-//   --wake          set AXManualAccessibility/AXEnhancedUserInterface on Teams processes
-//                   (the only write this tool ever performs; Teams then exposes its web tree)
+//   --wake          try AXManualAccessibility/AXEnhancedUserInterface on Teams processes
+//                   (the only write this tool performs). Diagnostics only: Teams 2 rejects
+//                   both (-25205/-25208) and exposes its web tree without them.
 //   --watch N       poll 4 Hz for N seconds, print JSONL events to stdout
 //   --dump-tree P   save one bounded AX tree snapshot (roles, subroles, DOM classes,
 //                   AXDescription/AXTitle; never AXValue, never text fields) to file P
@@ -92,8 +93,13 @@ struct SpeakerProbe {
         }
         if options.wake {
             let result = TeamsAXReader.wake(apps)
-            emit(["event": "wake", "results": result.map { ["pid": $0.key, "axError": $0.value] }])
-            Thread.sleep(forTimeInterval: 1.5)  // Chromium builds the tree asynchronously.
+            let accepted = result.values.contains { $0.values.contains(0) }
+            emit(["event": "wake", "anyAccepted": accepted,
+                  "results": result.map { pid, codes in
+                      ["pid": pid, "results": codes.mapValues { TeamsAXReader.axErrorName($0) }] as [String: Any]
+                  },
+                  "note": accepted ? "" : "rejected; not required, the tree is read without it"])
+            if accepted { Thread.sleep(forTimeInterval: 1.5) }  // Chromium builds the tree asynchronously.
         }
         if let path = options.dumpPath { try dumpTree(apps: apps, to: path) }
         if let seconds = options.watchSeconds { watch(apps: apps, seconds: seconds) }
@@ -109,6 +115,8 @@ struct SpeakerProbe {
             if !node.labels.isEmpty { row["labels"] = node.labels.map { redact(String($0.prefix(200))) } }
             if !node.domClasses.isEmpty { row["domClasses"] = node.domClasses }
             if let title = node.windowTitle { row["window"] = redact(title) }
+            if let tile = node.tileLabel { row["tile"] = redact(String(tile.prefix(200))) }
+            row["depth"] = node.depth
             return row
         }
         let data = try JSONSerialization.data(withJSONObject: ["nodes": rows, "count": rows.count],
@@ -125,6 +133,8 @@ struct SpeakerProbe {
         var lastSpeaking: Set<String> = []
         var lastRoster: Set<String> = []
         var lastWindows: [String] = []
+        var lastUnmuted: Set<String> = []
+        var lastFrames: [String] = []
         var tracker = TeamsSpeakerTracker()
         let end = ProcessInfo.processInfo.systemUptime + seconds
         var polls = 0
@@ -136,12 +146,22 @@ struct SpeakerProbe {
             let windows = Array(Set(nodes.compactMap(\.windowTitle))).sorted()
             if windows != lastWindows {
                 emit(["event": "windows", "titles": windows.map(redact),
-                      "compactView": windows.contains(where: TeamsAXSelectors.compactViewTitles.contains)])
+                      "compactView": windows.contains(where: TeamsSpeakerParser.isCompactView)])
                 lastWindows = windows
             }
             if snapshot.speaking != lastSpeaking {
                 emit(["event": "speaking", "names": snapshot.speaking.sorted().map(redact), "nodes": nodes.count])
                 lastSpeaking = snapshot.speaking
+            }
+            if snapshot.unmuted != lastUnmuted {
+                emit(["event": "unmuted", "names": snapshot.unmuted.sorted().map(redact)])
+                lastUnmuted = snapshot.unmuted
+            }
+            let frames = nodes.filter { $0.domClasses.contains(where: TeamsAXSelectors.speakingTileDOMClasses.contains) }
+                .map { $0.tileLabel.flatMap(TeamsSpeakerParser.tileName).map(redact) ?? "(no tile)" }
+            if frames != lastFrames {
+                emit(["event": "tileFrame", "owners": frames])
+                lastFrames = frames
             }
             let roster = Set(nodes.filter { $0.role == "AXListItem" || $0.role == "AXRow" || $0.role == "AXCell" }
                 .compactMap { $0.labels.first.flatMap(TeamsSpeakerParser.rosterName) })
