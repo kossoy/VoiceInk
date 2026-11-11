@@ -29,7 +29,16 @@ D=~/work/qa-evidence/teams-ax-$(date +%Y%m%d-%H%M); mkdir -p "$D"
 - Event counts were low because events fire only on change, and the signal appeared only in
   the two compact-view stretches.
 
-Practical consequence: with the observer on, names come while another app is in front of
-Teams (compact view up). Next capture to extend coverage: keep the main call window in front
-while people talk; `--watch` now reports `tileFrame` (owner of the frame, via the new `tile`
-and `depth` fields) and `unmuted` changes, which tells whether the frame follows the speaker.
+## Findings, call of 2026-11-11 16:01 (main call window in front, 3 participants incl. the user)
+
+- The speaking border is an AXEmptyGroup with `vdi-frame-occlusion`, one level below the
+  speaker's AXMenuItem tile (depth 22 under 21). `speaking` equalled the `tileFrame` owners in
+  73 of 73 changes; compact view never appeared, so every name came from the main window.
+- 600.2 s watch: a participant framed 570.8 s (95.1%), two at once 40.1 s (6.7%), nobody
+  29.4 s (4.9%). Border stretches: median 2.5 s / 8.9 s for the two speakers, shortest 0.8 s;
+  changes land within one 0.25 s poll. 23 cues, cue union 582.9 s (97.1%).
+- The user's own tile ("Myself video, ..., Unmuted, video is on, Fit to frame, ...") never
+  got the border; the probe would report it as `(self)`, the observer excludes it.
+
+Coverage by capture: compact-view only 1.8% of the call; main window in front 97.1%.
+The observer uses both signals; the main-window border is the primary one.

@@ -158,7 +158,11 @@ struct SpeakerProbe {
                 lastUnmuted = snapshot.unmuted
             }
             let frames = nodes.filter { $0.domClasses.contains(where: TeamsAXSelectors.speakingTileDOMClasses.contains) }
-                .map { $0.tileLabel.flatMap(TeamsSpeakerParser.tileName).map(redact) ?? "(no tile)" }
+                .map { node -> String in
+                    guard let tile = node.tileLabel else { return "(no tile)" }
+                    if TeamsSpeakerParser.isSelfTile(tile) { return "(self)" }
+                    return TeamsSpeakerParser.tileName(fromLabel: tile).map(redact) ?? "(unparsed tile)"
+                }
             if frames != lastFrames {
                 emit(["event": "tileFrame", "owners": frames])
                 lastFrames = frames

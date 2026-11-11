@@ -155,4 +155,100 @@ final class TeamsSpeakerObserverTests: XCTestCase {
         ])
         XCTAssertEqual(MeetingSpeakerNaming.clusterNames(diarization: diarization, cues: cues), ["A": "Doe, Jane"])
     }
+
+    // Second capture (main call window in front, 3 participants incl. the user), verbatim tile
+    // templates with placeholder names.
+    static let tileJane = "Doe, Jane, video is on, Has control of production tools, Context menu is available"
+    static let tileSam = "Roe, Sam, video is on, Has control of production tools, Context menu is available"
+    static let tileSelfUnmuted =
+        "Myself video, Poe, Pat, Has control of production tools, Unmuted, video is on, Fit to frame, Has context menu"
+
+    /// Main window as captured: the border is an AXEmptyGroup with vdi-frame-occlusion one
+    /// level below the speaker's AXMenuItem tile.
+    static func mainWindow(framed: Set<String>, selfFramed: Bool = false) -> [TeamsAXNode] {
+        var nodes = [
+            TeamsAXNode(role: "AXMenuItem", labels: [tileJane], domClasses: ["fui-Flex"], windowTitle: "Weekly sync", depth: 21),
+            TeamsAXNode(role: "AXMenuItem", labels: [tileSam], domClasses: ["fui-Flex"], windowTitle: "Weekly sync", depth: 21),
+            TeamsAXNode(role: "AXMenuItem", labels: [tileSelfUnmuted], domClasses: ["fui-Primitive"],
+                        windowTitle: "Weekly sync", depth: 22),
+        ]
+        for (name, tile) in [("Doe, Jane", tileJane), ("Roe, Sam", tileSam)] where framed.contains(name) {
+            nodes.append(TeamsAXNode(role: "AXGroup", subrole: "AXEmptyGroup", domClasses: ["fui-Flex", "vdi-frame-occlusion"],
+                                     windowTitle: "Weekly sync", tileLabel: tile, depth: 22))
+        }
+        if selfFramed {
+            nodes.append(TeamsAXNode(role: "AXGroup", subrole: "AXEmptyGroup", domClasses: ["vdi-frame-occlusion"],
+                                     windowTitle: "Weekly sync", tileLabel: tileSelfUnmuted, depth: 23))
+        }
+        return nodes
+    }
+
+    func testMainWindowBorderIsTheSpeakerSignal() {
+        let one = TeamsSpeakerSnapshot.from(nodes: Self.mainWindow(framed: ["Roe, Sam"]))
+        XCTAssertEqual(one.speaking, ["Roe, Sam"])
+        XCTAssertEqual(one.framed, ["Roe, Sam"])
+        XCTAssertEqual(one.labelled, [])
+        XCTAssertFalse(one.compactView)
+        let both = TeamsSpeakerSnapshot.from(nodes: Self.mainWindow(framed: ["Doe, Jane", "Roe, Sam"]))
+        XCTAssertEqual(both.speaking, ["Doe, Jane", "Roe, Sam"])
+        let silence = TeamsSpeakerSnapshot.from(nodes: Self.mainWindow(framed: []))
+        XCTAssertEqual(silence.speaking, [])
+        XCTAssertEqual(silence.unmuted, ["Doe, Jane", "Roe, Sam"])  // unmuted is not speaking
+        let me = TeamsSpeakerSnapshot.from(nodes: Self.mainWindow(framed: [], selfFramed: true))
+        XCTAssertEqual(me.speaking, [])
+        XCTAssertTrue(me.selfFramed)
+        XCTAssertNil(TeamsSpeakerParser.tileName(fromLabel: Self.tileSelfUnmuted))
+    }
+
+    /// Replays the 73 border changes of the second capture (600.2 s, 4 Hz polls).
+    func testMainWindowCaptureReplay() {
+        let changes: [(TimeInterval, Set<String>)] = [
+        (0.10, ["Doe, Jane"]), (4.88, ["Roe, Sam"]), (8.96, ["Doe, Jane", "Roe, Sam"]), (9.96, ["Roe, Sam"]),
+        (115.03, ["Doe, Jane", "Roe, Sam"]), (116.82, ["Doe, Jane"]), (118.86, ["Roe, Sam"]),
+        (122.94, ["Doe, Jane", "Roe, Sam"]), (125.98, ["Doe, Jane"]), (137.95, ["Doe, Jane", "Roe, Sam"]),
+        (142.02, ["Doe, Jane"]), (143.05, ["Roe, Sam"]), (143.87, []), (144.05, ["Roe, Sam"]),
+        (145.06, ["Doe, Jane", "Roe, Sam"]), (146.84, ["Doe, Jane"]), (148.87, ["Doe, Jane", "Roe, Sam"]),
+        (152.92, ["Roe, Sam"]), (156.00, ["Doe, Jane", "Roe, Sam"]), (158.00, ["Roe, Sam"]),
+        (166.91, ["Doe, Jane", "Roe, Sam"]), (168.94, ["Doe, Jane"]), (174.03, ["Doe, Jane", "Roe, Sam"]),
+        (175.05, ["Roe, Sam"]), (180.90, []), (187.00, ["Roe, Sam"]), (198.96, ["Doe, Jane"]),
+        (203.01, ["Doe, Jane", "Roe, Sam"]), (205.05, ["Roe, Sam"]), (215.98, []), (218.02, ["Roe, Sam"]),
+        (228.98, ["Doe, Jane", "Roe, Sam"]), (231.00, ["Roe, Sam"]), (236.11, []), (238.90, ["Roe, Sam"]),
+        (255.19, ["Doe, Jane", "Roe, Sam"]), (258.25, ["Roe, Sam"]), (274.26, []), (275.28, ["Roe, Sam"]),
+        (294.12, ["Doe, Jane", "Roe, Sam"]), (298.20, ["Roe, Sam"]), (302.27, []), (303.29, ["Roe, Sam"]),
+        (306.07, []), (308.12, ["Roe, Sam"]), (313.20, []), (314.22, ["Roe, Sam"]), (316.26, []),
+        (320.09, ["Roe, Sam"]), (332.25, []), (333.27, ["Roe, Sam"]), (346.18, []), (346.32, ["Roe, Sam"]),
+        (350.07, []), (353.13, ["Roe, Sam"]), (449.16, ["Doe, Jane", "Roe, Sam"]), (450.17, ["Roe, Sam"]),
+        (501.18, ["Doe, Jane", "Roe, Sam"]), (503.22, ["Roe, Sam"]), (519.24, ["Doe, Jane", "Roe, Sam"]),
+        (521.27, ["Roe, Sam"]), (527.38, ["Doe, Jane", "Roe, Sam"]), (528.38, ["Roe, Sam"]), (536.26, []),
+        (538.29, ["Roe, Sam"]), (540.33, []), (541.36, ["Roe, Sam"]), (544.39, []), (545.41, ["Roe, Sam"]),
+        (554.30, []), (555.32, ["Roe, Sam"]), (591.38, ["Doe, Jane", "Roe, Sam"]), (593.41, ["Roe, Sam"])
+        ]
+        var tracker = TeamsSpeakerTracker()
+        var cues: [MeetingSpeakerCue] = []
+        var framed: Set<String> = []
+        var next = 0
+        var namedPolls = 0
+        let polls = 2_401
+        for tick in 0..<polls {
+            let t = Double(tick) * 0.25
+            while next < changes.count, changes[next].0 <= t { framed = changes[next].1; next += 1 }
+            let snapshot = TeamsSpeakerSnapshot.from(nodes: Self.mainWindow(framed: framed))
+            if !snapshot.speaking.isEmpty { namedPolls += 1 }
+            cues += tracker.observe(snapshot, at: t)
+        }
+        cues += tracker.finish(at: 600.25)
+        XCTAssertEqual(Set(cues.map(\.displayName)), ["Doe, Jane", "Roe, Sam"])
+        XCTAssertGreaterThan(Double(namedPolls) / Double(polls), 0.93)   // 95% of the call named
+        var union: [(TimeInterval, TimeInterval)] = []
+        for cue in cues.sorted(by: { $0.range.start < $1.range.start }) {
+            if let last = union.last, cue.range.start <= last.1 {
+                union[union.count - 1].1 = max(last.1, cue.range.end)
+            } else {
+                union.append((cue.range.start, cue.range.end))
+            }
+        }
+        let covered = union.reduce(0) { $0 + $1.1 - $1.0 }
+        XCTAssertGreaterThan(covered, 560)   // probe at 4c67596: 582.9 s cue union, 97%
+        XCTAssertTrue((15...40).contains(cues.count), "\(cues.count) cues")
+    }
 }

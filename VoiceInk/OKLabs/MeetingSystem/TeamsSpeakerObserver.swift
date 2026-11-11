@@ -11,18 +11,18 @@ import MeetingCore
 // diarization clusters get their names from these cues by majority vote
 // (MeetingSpeakerNaming).
 //
-// Verified on a live call (Teams 26289.204, 2026-11-11, 3+ participants):
-// - "<Name> is speaking" exists only in the "Meeting compact view" window, which Teams shows
-//   while the main call window is not in front; during silence it reads "Nobody is speaking".
-//   While it was up, it named a participant 74% of the time (11.5 of 15.5 s) and said
-//   "Nobody" 21%; the main call window never carries the label.
-// - Main-window tiles are AXMenuItem "Last, First, [video is on,] Has control of production
-//   tools, [muted,] Context menu is available"; the own tile starts with "Myself video".
-//   One AXEmptyGroup with DOM class vdi-frame-occlusion sits in the gallery; whether it is
-//   the active-speaker frame, and which tile owns it, is NOT confirmed yet (needs a capture
-//   with tree paths: `meeting-probe --watch` now reports it as "tileFrame").
-// - The web tree is exposed without waking: AXManualAccessibility/AXEnhancedUserInterface
-//   writes fail (-25205/-25208) and are not needed, so the observer never writes to Teams.
+// Two signals, both verified on live calls (Teams 26289.204, 2026-11-11, two 600 s captures):
+// 1. Main call window in front: the active speaker's tile (AXMenuItem, depth 21) gets a child
+//    AXEmptyGroup with DOM class vdi-frame-occlusion: Teams' purple speaking border. It
+//    followed the speakers in 73 of 73 changes, named someone 95% of the call (two at once
+//    7%), switched within one 0.25 s poll, and dropped in silence (5%). The user's own tile
+//    ("Myself video, ...") is excluded and never showed the border.
+// 2. Main window not in front: the "Meeting compact view" window says "<Name> is speaking",
+//    "Nobody is speaking" in silence. Only 1.8% of the first call, because compact view was
+//    up only 15.5 s; it named a participant 74% of that time.
+// Tiles: "Last, First, [video is on,] Has control of production tools, [muted,] Context menu
+// is available". The web tree is readable without waking: AXManualAccessibility /
+// AXEnhancedUserInterface writes fail (-25205/-25208), so the observer never writes to Teams.
 //
 // Off unless the user default `oklabs.meeting.teamsSpeakerObserver` is true.
 
@@ -36,8 +36,8 @@ public enum TeamsAXSelectors {
     public static let noSpeakerNames: Set<String> = ["nobody", "no one", "no-one", "someone"]
     /// Window that carries the speaking label; title "Meeting compact view | <meeting title>".
     public static let compactViewTitlePrefix = "Meeting compact view"
-    /// Gallery frame class. Unconfirmed as the active-speaker frame; used only when the frame
-    /// sits inside a tile.
+    /// DOM class of the speaking border inside the active speaker's tile (verified, main
+    /// window). Counts only inside a tile; a frame without a tile ancestor names nobody.
     public static let speakingTileDOMClasses = ["vdi-frame-occlusion"]
     /// Participant tiles in the main call window (verified).
     public static let tileRole = "AXMenuItem"
@@ -46,7 +46,8 @@ public enum TeamsAXSelectors {
     /// Comma-separated tile parts that describe state, not the name (verified + likely variants).
     public static let tileStatusFragments = ["control of production tools", "menu is available", "context menu",
                                              "video is on", "video is off", "muted", "unmuted", "camera",
-                                             "hand raised", "is presenting", "pinned", "spotlighted", "speaking"]
+                                             "hand raised", "is presenting", "pinned", "spotlighted", "speaking",
+                                             "fit to frame", "fill frame"]
     /// Parenthesised tags Teams appends to names.
     public static let nameTags = ["guest", "unverified", "external", "organizer", "organiser", "presenter",
                                   "attendee", "you", "me"]
@@ -126,6 +127,10 @@ public enum TeamsSpeakerParser {
         return name.isEmpty ? nil : name
     }
 
+    public static func isSelfTile(_ label: String) -> Bool {
+        label.lowercased().hasPrefix(TeamsAXSelectors.selfTilePrefix)
+    }
+
     /// Whether a tile label says the participant's mic is muted.
     public static func tileIsMuted(_ label: String) -> Bool {
         label.components(separatedBy: ",").contains { $0.trimmingCharacters(in: .whitespaces).lowercased() == "muted" }
@@ -172,8 +177,14 @@ public struct TeamsAXNode: Equatable, Sendable {
 
 /// What one poll saw.
 public struct TeamsSpeakerSnapshot: Equatable, Sendable {
-    /// Names Teams marks as speaking now.
+    /// Names Teams marks as speaking now (union of both signals).
     public var speaking: Set<String>
+    /// From the main-window tile border.
+    public var framed: Set<String> = []
+    /// From the compact-view "<Name> is speaking" label.
+    public var labelled: Set<String> = []
+    /// The border sat on the user's own tile (excluded from `speaking`; the mic track covers it).
+    public var selfFramed = false
     /// Participants whose tile is not muted (diagnostics; unmuted is not speaking).
     public var unmuted: Set<String>
     public var compactView: Bool
@@ -187,7 +198,9 @@ public struct TeamsSpeakerSnapshot: Equatable, Sendable {
     }
 
     public static func from(nodes: [TeamsAXNode]) -> TeamsSpeakerSnapshot {
-        var speaking = Set<String>()
+        var framed = Set<String>()
+        var labelled = Set<String>()
+        var selfFramed = false
         var unmuted = Set<String>()
         var compact = false
         var hasher = Hasher()
@@ -196,7 +209,7 @@ public struct TeamsSpeakerSnapshot: Equatable, Sendable {
             hasher.combine(node.domClasses)
             if TeamsSpeakerParser.isCompactView(node.windowTitle) { compact = true }
             for label in node.labels {
-                if let name = TeamsSpeakerParser.speakingName(fromLabel: label) { speaking.insert(name) }
+                if let name = TeamsSpeakerParser.speakingName(fromLabel: label) { labelled.insert(name) }
             }
             if node.role == TeamsAXSelectors.tileRole, let label = node.labels.first,
                 let name = TeamsSpeakerParser.tileName(fromLabel: label), !TeamsSpeakerParser.tileIsMuted(label)
@@ -204,13 +217,21 @@ public struct TeamsSpeakerSnapshot: Equatable, Sendable {
                 unmuted.insert(name)
             }
             if node.domClasses.contains(where: TeamsAXSelectors.speakingTileDOMClasses.contains),
-                let tile = node.tileLabel, let name = TeamsSpeakerParser.tileName(fromLabel: tile)
+                let tile = node.tileLabel
             {
-                speaking.insert(name)
+                if let name = TeamsSpeakerParser.tileName(fromLabel: tile) {
+                    framed.insert(name)
+                } else if TeamsSpeakerParser.isSelfTile(tile) {
+                    selfFramed = true
+                }
             }
         }
-        return TeamsSpeakerSnapshot(speaking: speaking, unmuted: unmuted, compactView: compact,
-                                    fingerprint: hasher.finalize())
+        var snapshot = TeamsSpeakerSnapshot(speaking: framed.union(labelled), unmuted: unmuted, compactView: compact,
+                                            fingerprint: hasher.finalize())
+        snapshot.framed = framed
+        snapshot.labelled = labelled
+        snapshot.selfFramed = selfFramed
+        return snapshot
     }
 }
 
