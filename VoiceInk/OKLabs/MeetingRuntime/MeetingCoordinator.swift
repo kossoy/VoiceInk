@@ -45,6 +45,9 @@ final class MeetingCoordinator: ObservableObject {
     private var language: String?
     private var queueIsSuspended = false
     private let diarizer = MeetingDiarizer()
+    /// Teams Accessibility speaker names (on by default; `oklabs.meeting.teamsSpeakerObserver`
+    /// = false turns it off). Its cues name the diarization clusters by majority vote (MeetingSpeakerNaming).
+    private var speakerObserver: TeamsSpeakerObserver?
     private let scribeDiarizer = MeetingScribeDiarizer()
     /// Sessions whose automatic diarization already ran or failed in this app run; a manual
     /// "Detect Speakers" still works for them.
@@ -60,6 +63,7 @@ final class MeetingCoordinator: ObservableObject {
         self.engine = engine
         self.models = models
         self.registry = registry
+        TeamsSpeakerObserver.registerDefault()
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("com.prakashjoshipax.VoiceInk/Meetings", isDirectory: true)
         store = MeetingTranscriptStore(root: root)
@@ -127,6 +131,7 @@ final class MeetingCoordinator: ObservableObject {
             installCallbacks(on: capture, sessionID: newSession.id)
             origin = MeetingAudioCapture.hostTime
             try await capture.start(origin: origin, from: 0)
+            startSpeakerObserver()
             detector.recordingDidStart()
         } catch {
             message = error.localizedDescription
@@ -144,6 +149,7 @@ final class MeetingCoordinator: ObservableObject {
         isChangingCapture = true
         defer { isChangingCapture = false }
         if state == .recording {
+            stopSpeakerObserver()
             let result = await capture.stop()
             do { try session?.pause(at: result.end) } catch { message = error.localizedDescription }
             if let error = result.error { message = error }
@@ -154,6 +160,7 @@ final class MeetingCoordinator: ObservableObject {
                 let start = max(0, MeetingAudioCapture.hostTime - origin)
                 try session?.resume(at: start)
                 try await capture.start(origin: origin, from: start)
+                startSpeakerObserver()
             } catch {
                 message = error.localizedDescription
                 try? session?.pause(at: max(0, MeetingAudioCapture.hostTime - origin))
@@ -167,6 +174,7 @@ final class MeetingCoordinator: ObservableObject {
         isChangingCapture = true
         defer { isChangingCapture = false }
         var end = max(0, MeetingAudioCapture.hostTime - origin)
+        stopSpeakerObserver()
         if session.state == .recording, let capture {
             let result = await capture.stop()
             end = max(end, result.end)
@@ -311,6 +319,22 @@ final class MeetingCoordinator: ObservableObject {
                 .map { try store.load(id: $0) }
                 .sorted { $0.startedAt > $1.startedAt }
         } catch { message = "Could not read saved meetings: \(error.localizedDescription)" }
+    }
+
+    private func startSpeakerObserver() {
+        guard TeamsSpeakerObserver.isEnabled(), session?.state == .recording else { return }
+        let observer = speakerObserver ?? TeamsSpeakerObserver()
+        speakerObserver = observer
+        let origin = origin
+        observer.start(clock: { max(0, MeetingAudioCapture.hostTime - origin) }) { [weak self] cue in
+            // Cues reach disk with the next checkpoint (chunk, pause, stop).
+            do { try self?.session?.recordSpeakerCue(cue) } catch {}
+        }
+    }
+
+    /// Delivers the cues still open before the session pauses or finishes.
+    private func stopSpeakerObserver() {
+        speakerObserver?.stop()
     }
 
     private func checkpoint() {
