@@ -60,8 +60,14 @@ public enum MeetingSessionState: String, Codable, Sendable {
 }
 
 /// Capture state is separate from ASR delivery: a result can arrive after pause/stop.
+///
+/// Schema history: 1 = transcript, recording ranges and speaker cues; 2 adds
+/// `speakerAssignments` (names the user gave to voice clusters and single lines).
+/// A version 1 checkpoint decodes with empty assignments and is written back as version 2.
 public struct MeetingSession: Codable, Equatable, Sendable, Identifiable {
-    public let schemaVersion: Int
+    public static let currentSchemaVersion = 2
+
+    public private(set) var schemaVersion: Int
     public let id: UUID
     public let title: String
     public let startedAt: Date
@@ -69,11 +75,12 @@ public struct MeetingSession: Codable, Equatable, Sendable, Identifiable {
     public private(set) var segments: [MeetingTranscriptSegment]
     public private(set) var recordedRanges: [MeetingTimeRange]
     public private(set) var speakerCues: [MeetingSpeakerCue]
+    public private(set) var speakerAssignments: MeetingSpeakerAssignments
     private var openRangeStart: TimeInterval?
     private var lastControlTime: TimeInterval
 
     public init(id: UUID = UUID(), title: String, startedAt: Date = Date()) {
-        self.schemaVersion = 1
+        self.schemaVersion = Self.currentSchemaVersion
         self.id = id
         self.title = title
         self.startedAt = startedAt
@@ -81,8 +88,35 @@ public struct MeetingSession: Codable, Equatable, Sendable, Identifiable {
         self.segments = []
         self.recordedRanges = []
         self.speakerCues = []
+        self.speakerAssignments = .empty
         self.openRangeStart = 0
         self.lastControlTime = 0
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, title, startedAt, state, segments, recordedRanges, speakerCues
+        case speakerAssignments, openRangeStart, lastControlTime
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try c.decode(Int.self, forKey: .schemaVersion)
+        guard (1...Self.currentSchemaVersion).contains(version) else {
+            throw MeetingSessionError.unsupportedCheckpoint
+        }
+        // Migrate in memory; the next save writes the current version.
+        schemaVersion = Self.currentSchemaVersion
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        startedAt = try c.decode(Date.self, forKey: .startedAt)
+        state = try c.decode(MeetingSessionState.self, forKey: .state)
+        segments = try c.decode([MeetingTranscriptSegment].self, forKey: .segments)
+        recordedRanges = try c.decode([MeetingTimeRange].self, forKey: .recordedRanges)
+        speakerCues = try c.decode([MeetingSpeakerCue].self, forKey: .speakerCues)
+        speakerAssignments = version >= 2
+            ? try c.decode(MeetingSpeakerAssignments.self, forKey: .speakerAssignments) : .empty
+        openRangeStart = try c.decodeIfPresent(TimeInterval.self, forKey: .openRangeStart)
+        lastControlTime = try c.decode(TimeInterval.self, forKey: .lastControlTime)
     }
 
     public mutating func pause(at time: TimeInterval) throws {
@@ -140,9 +174,25 @@ public struct MeetingSession: Codable, Equatable, Sendable, Identifiable {
         speakerCues.append(cue)
     }
 
+    /// Names every line of a voice cluster; nil or blank removes the name.
+    public mutating func nameSpeakerCluster(_ clusterID: String, as name: String?) {
+        speakerAssignments.clusterNames[clusterID] = Self.cleanName(name)
+    }
+
+    /// Names one transcript line only ("only this line"); nil or blank removes the name.
+    public mutating func nameSegment(_ segmentID: UUID, as name: String?) throws {
+        guard segments.contains(where: { $0.id == segmentID }) else { throw MeetingSessionError.invalidSpeakerCue }
+        speakerAssignments.segmentNames[segmentID] = Self.cleanName(name)
+    }
+
+    private static func cleanName(_ name: String?) -> String? {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     /// Validate decoded checkpoints before using them for recovery.
     public func validate() throws {
-        guard schemaVersion == 1 else { throw MeetingSessionError.unsupportedCheckpoint }
+        guard schemaVersion == Self.currentSchemaVersion else { throw MeetingSessionError.unsupportedCheckpoint }
         guard lastControlTime.isFinite, lastControlTime >= 0 else { throw MeetingSessionError.invalidTime }
         guard (state == .recording) == (openRangeStart != nil) else {
             throw MeetingSessionError.invalidTransition
@@ -166,6 +216,10 @@ public struct MeetingSession: Codable, Equatable, Sendable, Identifiable {
             guard isRecorded(segment.range) else { throw MeetingSessionError.outsideRecording }
         }
         for cue in speakerCues { try validateSpeakerCue(cue) }
+        let names = Array(speakerAssignments.clusterNames.values) + Array(speakerAssignments.segmentNames.values)
+        guard names.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw MeetingSessionError.invalidSpeakerCue
+        }
     }
 
     private func validateControlTime(_ time: TimeInterval) throws {
