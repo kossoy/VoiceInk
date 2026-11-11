@@ -21,6 +21,15 @@ final class MeetingCoordinator: ObservableObject {
     /// Voice clusters of the current session's system audio, once diarization ran.
     @Published private(set) var diarization: MeetingDiarization?
     @Published private(set) var isDiarizing = false
+    /// The optional ElevenLabs Scribe v3 pass that refines `diarization` (diarization-scribe.json).
+    @Published private(set) var scribeDiarization: MeetingScribeDiarization?
+    @Published private(set) var isRefiningSpeakers = false
+    /// "Refine speakers with ElevenLabs" in the meeting window. Persisted; unset means on when an
+    /// ElevenLabs key is configured.
+    @Published var scribeDiarizationEnabled: Bool {
+        didSet { UserDefaults.standard.set(scribeDiarizationEnabled, forKey: Self.scribeDiarizationDefaultsKey) }
+    }
+    static let scribeDiarizationDefaultsKey = "oklabs.meeting.scribeDiarization"
     let permissions = MeetingPermissions()
     let detector = MeetingDetector()
 
@@ -39,6 +48,7 @@ final class MeetingCoordinator: ObservableObject {
     /// Teams Accessibility speaker names (on by default; `oklabs.meeting.teamsSpeakerObserver`
     /// = false turns it off). Its cues name the diarization clusters by majority vote (MeetingSpeakerNaming).
     private var speakerObserver: TeamsSpeakerObserver?
+    private let scribeDiarizer = MeetingScribeDiarizer()
     /// Sessions whose automatic diarization already ran or failed in this app run; a manual
     /// "Detect Speakers" still works for them.
     private var diarizationAttempted = Set<UUID>()
@@ -57,8 +67,21 @@ final class MeetingCoordinator: ObservableObject {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("com.prakashjoshipax.VoiceInk/Meetings", isDirectory: true)
         store = MeetingTranscriptStore(root: root)
-        selectedModelKey = models.currentTranscriptionModel?.selectionKey ?? ""
+        scribeDiarizationEnabled =
+            UserDefaults.standard.object(forKey: Self.scribeDiarizationDefaultsKey) as? Bool
+            ?? MeetingScribeDiarizer.hasAPIKey
+        selectedModelKey = Self.defaultModelKey(models)
         refreshSavedMeetings()
+    }
+
+    /// The dictation model, except that ElevenLabs Scribe V2 is upgraded to Scribe V3 for
+    /// meetings when V3 is usable. A model picked in the meeting window is kept as is.
+    static func defaultModelKey(_ models: TranscriptionModelManager) -> String {
+        guard let current = models.currentTranscriptionModel else { return "" }
+        guard current.provider == .elevenLabs else { return current.selectionKey }
+        let wanted = ScribeModels.meetingBatchModel(forSelected: current.name)
+        let upgraded = models.usableModels.first { $0.provider == .elevenLabs && $0.name == wanted }
+        return (upgraded ?? current).selectionKey
     }
 
     var hasOpenCapture: Bool { session.map { $0.state != .finished } ?? false }
@@ -94,6 +117,7 @@ final class MeetingCoordinator: ObservableObject {
             let directory = try store.save(newSession)
             session = newSession
             diarization = nil
+            scribeDiarization = nil
             jobs = []
             queueIsSuspended = false
             jobStore = MeetingAudioJobStore(sessionDirectory: directory)
@@ -277,6 +301,8 @@ final class MeetingCoordinator: ObservableObject {
                 diarization = nil
                 message = "Speaker data of this meeting is unreadable; use Detect Speakers to rebuild it."
             }
+            // The cloud refinement is optional: unreadable means "not there".
+            scribeDiarization = (try? store.loadScribeDiarization(id: recovered.id)) ?? nil
             jobStore = audioStore
             queueIsSuspended = true
             message = pendingCount + failedCount > 0 ? "Recovered audio is ready. Retry to transcribe pending chunks." : nil
@@ -325,7 +351,7 @@ final class MeetingCoordinator: ObservableObject {
     // MARK: - Speakers
 
     var speakerLabeler: MeetingSpeakerLabeler? {
-        session.map { MeetingSpeakerLabeler(session: $0, diarization: diarization) }
+        session.map { MeetingSpeakerLabeler(session: $0, diarization: diarization, scribe: scribeDiarization) }
     }
 
     /// Whether "Detect Speakers" makes sense now: finished, fully transcribed, has system audio.
@@ -368,13 +394,44 @@ final class MeetingCoordinator: ObservableObject {
                     // The user may have opened another meeting meanwhile: save into the right one.
                     let owner = self.session?.id == sessionID ? self.session! : try self.store.load(id: sessionID)
                     try self.store.saveDiarization(found, for: owner)
-                    if self.session?.id == sessionID { self.diarization = found }
+                    if self.session?.id == sessionID {
+                        self.diarization = found
+                        // A rerun's clusters differ; the old cloud mapping does not apply to them.
+                        self.scribeDiarization = nil
+                    }
+                    if self.scribeDiarizationEnabled { self.refineSpeakers(sessionID: sessionID, chunks: chunks) }
                 } catch {
                     self.message = "Could not save speaker data: \(error.localizedDescription)"
                 }
             case .failure(let error):
                 if self.session?.id == sessionID {
                     self.message = "Speaker separation did not run: \(error.localizedDescription) Lines stay labelled Others."
+                }
+            }
+        }
+    }
+
+    /// Optional second pass after the local one: ElevenLabs Scribe v3 diarization of the same
+    /// system track. Never blocks anything; on failure the local result stays as it is.
+    private func refineSpeakers(sessionID: UUID, chunks: [MeetingDiarizer.Chunk]) {
+        isRefiningSpeakers = true
+        Task { [weak self, scribeDiarizer] in
+            let result: Result<MeetingScribeDiarization, Error>
+            do { result = .success(try await scribeDiarizer.diarize(chunks)) } catch { result = .failure(error) }
+            guard let self else { return }
+            self.isRefiningSpeakers = false
+            switch result {
+            case .success(let found):
+                do {
+                    let owner = self.session?.id == sessionID ? self.session! : try self.store.load(id: sessionID)
+                    try self.store.saveScribeDiarization(found, for: owner)
+                    if self.session?.id == sessionID { self.scribeDiarization = found }
+                } catch {
+                    self.message = "Could not save the ElevenLabs speaker data: \(error.localizedDescription)"
+                }
+            case .failure(let error):
+                if self.session?.id == sessionID {
+                    self.message = "ElevenLabs speaker refinement did not run: \(error.localizedDescription) Local speakers are kept."
                 }
             }
         }
@@ -400,7 +457,8 @@ final class MeetingCoordinator: ObservableObject {
     func copyTranscript() {
         guard let session else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(MeetingTranscriptExport.text(session, diarization: diarization), forType: .string)
+        NSPasteboard.general.setString(
+            MeetingTranscriptExport.text(session, diarization: diarization, scribe: scribeDiarization), forType: .string)
     }
 
     func export() {
@@ -409,7 +467,10 @@ final class MeetingCoordinator: ObservableObject {
         panel.allowedContentTypes = [.plainText]
         panel.nameFieldStringValue = "meeting-\(session.startedAt.formatted(.iso8601.year().month().day())).txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try MeetingTranscriptExport.text(session, diarization: diarization).write(to: url, atomically: true, encoding: .utf8) }
+        do {
+            try MeetingTranscriptExport.text(session, diarization: diarization, scribe: scribeDiarization)
+                .write(to: url, atomically: true, encoding: .utf8)
+        }
         catch { message = error.localizedDescription }
     }
 }

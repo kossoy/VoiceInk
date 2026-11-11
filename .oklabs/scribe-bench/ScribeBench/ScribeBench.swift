@@ -60,7 +60,9 @@ struct ScribeBench {
 
         var live = LiveScribe(apiKey: apiKey, keyterms: keyterms)
         live.language = options.language
-        let batch = BatchScribe(apiKey: apiKey, keyterms: keyterms)
+        live.model = options.model
+        var batch = BatchScribe(apiKey: apiKey, keyterms: keyterms)
+        batch.model = options.batchModel
 
         var upload = BenchTally()
         var realtime = BenchTally()
@@ -131,7 +133,7 @@ struct ScribeBench {
         progress("")
 
         let referenceKind =
-            options.refs == nil ? "batch scribe_v2 (agreement, not ground truth)" : "--refs file"
+            options.refs == nil ? "batch \(options.batchModel) (agreement, not ground truth)" : "--refs file"
         print("")
         print(
             "scribe-bench: \(upload.attempted) recordings, \(String(format: "%.1f", audioSeconds / 60)) min audio, \(keyterms.count) keyterms, skipped \(skipped), reference = \(referenceKind)"

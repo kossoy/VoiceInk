@@ -240,13 +240,45 @@ final class URLTests: XCTestCase {
         }
     }
 
+    func testRealtimeModelFollowsTheSelectedScribeModel() {
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v3"), "scribe_v3_live")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v2"), "scribe_v2_realtime")
+        // No live medical model: ElevenLabs points live medical audio to v2 Realtime.
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v2_medical"), "scribe_v2_realtime")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: " Scribe_V2 "), "scribe_v2_realtime")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: nil), "scribe_v3_live")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "something-new"), "scribe_v3_live")
+        XCTAssertEqual(ScribeLimits.realtimeModel, "scribe_v3_live")
+    }
+
+    func testRealtimeModelOverrideWins() {
+        XCTAssertEqual(
+            ScribeModels.realtimeModel(forSelected: "scribe_v3", override: "scribe_v2_realtime"), "scribe_v2_realtime")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v2", override: "  "), "scribe_v2_realtime")
+        XCTAssertEqual(ScribeModels.realtimeModel(forSelected: "scribe_v3", override: nil), "scribe_v3_live")
+    }
+
+    func testMeetingsMoveScribeV2UpToV3() {
+        XCTAssertEqual(ScribeModels.meetingBatchModel(forSelected: "scribe_v2"), "scribe_v3")
+        XCTAssertEqual(ScribeModels.meetingBatchModel(forSelected: "scribe_v3"), "scribe_v3")
+        XCTAssertEqual(ScribeModels.meetingBatchModel(forSelected: "scribe_v2_medical"), "scribe_v2_medical")
+    }
+
+    func testV2RealtimeURLStillBuilds() throws {
+        let url = try ScribeURL.build(
+            endpoint: ScribeLimits.defaultEndpoint, model: ScribeModels.realtimeV2, language: nil, keyterms: ["T3 Code"])
+        let items = query(url)
+        XCTAssertTrue(items.contains { $0 == ("model_id", "scribe_v2_realtime") })
+        XCTAssertTrue(items.contains { $0 == ("commit_strategy", "manual") })
+    }
+
     func testCarriesSettingsLanguageAndFiftyKeyterms() throws {
         let url = try ScribeURL.build(
             endpoint: ScribeLimits.defaultEndpoint, language: "he", keyterms: ["T3 Code", "a+b"] + sampleKeyterms.dropLast(2))
         let items = query(url)
         XCTAssertEqual(url.scheme, "wss")
         XCTAssertEqual(url.path, "/v1/speech-to-text/realtime")
-        XCTAssertTrue(items.contains { $0 == ("model_id", "scribe_v2_realtime") })
+        XCTAssertTrue(items.contains { $0 == ("model_id", "scribe_v3_live") })
         XCTAssertTrue(items.contains { $0 == ("audio_format", "pcm_16000") })
         XCTAssertTrue(items.contains { $0 == ("commit_strategy", "manual") })
         XCTAssertTrue(items.contains { $0 == ("no_verbatim", "true") })
@@ -285,5 +317,47 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(scribeRMS(silence(0.1)), 0)
         XCTAssertGreaterThan(scribeRMS(tone(0.1)), ScribeLimits.quietRMS)
         XCTAssertEqual(scribeRMS([]), 0)
+    }
+}
+
+final class ScribeDiarizationRequestTests: XCTestCase {
+    func testParseKeepsSpokenWordsWithSpeakers() throws {
+        let json = #"""
+            {"text":"hi there","words":[
+             {"text":"hi","type":"word","start":0.1,"end":0.3,"speaker_id":"speaker_0"},
+             {"text":" ","type":"spacing","start":0.3,"end":0.4,"speaker_id":"speaker_0"},
+             {"text":"(laughs)","type":"audio_event","start":0.4,"end":0.9,"speaker_id":"speaker_1"},
+             {"text":"there","type":"word","start":1.0,"end":1.2,"speaker_id":"speaker_1"},
+             {"text":"orphan","type":"word","start":1.3,"end":1.4},
+             {"text":"backwards","type":"word","start":2.0,"end":1.0,"speaker_id":"speaker_1"}]}
+            """#
+        let words = try ScribeDiarizationRequest.parse(Data(json.utf8))
+        XCTAssertEqual(words.map(\.text), ["hi", "there"])
+        XCTAssertEqual(words.map(\.speakerID), ["speaker_0", "speaker_1"])
+        XCTAssertEqual(words.first?.start, 0.1)
+        XCTAssertThrowsError(try ScribeDiarizationRequest.parse(Data(#"{"text":"x"}"#.utf8)))
+    }
+
+    func testBodyCarriesDiarizationFieldsAndTheWholeFile() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let audio = dir.appendingPathComponent("a.wav")
+        let payload = Data((0..<3_000_000).map { UInt8($0 % 251) })
+        try payload.write(to: audio)
+        let body = dir.appendingPathComponent("body")
+        let request = ScribeDiarizationRequest(apiKey: "k")
+        let type = try request.writeBody(audio: audio, to: body, boundary: "B")
+        XCTAssertEqual(type, "multipart/form-data; boundary=B")
+        let data = try Data(contentsOf: body)
+        let head = String(decoding: data.prefix(800), as: UTF8.self)
+        for field in ["name=\"model_id\"\r\n\r\nscribe_v3", "name=\"diarize\"\r\n\r\ntrue",
+            "name=\"timestamps_granularity\"\r\n\r\nword", "filename=\"system.wav\""]
+        {
+            XCTAssertTrue(head.contains(field), field)
+        }
+        XCTAssertFalse(head.contains("keyterms"))
+        XCTAssertNotNil(data.range(of: payload))
+        XCTAssertTrue(String(decoding: data.suffix(10), as: UTF8.self).hasSuffix("--B--\r\n"))
     }
 }

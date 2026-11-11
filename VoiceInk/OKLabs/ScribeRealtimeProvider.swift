@@ -9,7 +9,10 @@ struct OKLabsFatalStreamingError: LocalizedError {
     var errorDescription: String? { underlying.errorDescription }
 }
 
-/// OKLabs fork: ElevenLabs Scribe v2 Realtime with voxtype's engine semantics.
+/// OKLabs fork: ElevenLabs Scribe Realtime with voxtype's engine semantics.
+///
+/// The live model follows the mode's Scribe model: Scribe V3 -> `scribe_v3_live`, Scribe V2
+/// (and V2 Medical) -> `scribe_v2_realtime`; `oklabs.scribeRealtimeModel` forces one.
 ///
 /// - Audio is re-framed into 100 ms frames; the client commits by itself at the
 ///   first pause after 30 s and always by 34 s, so the server never auto-commits.
@@ -17,7 +20,8 @@ struct OKLabsFatalStreamingError: LocalizedError {
 ///   commit is never throttled; all segments are joined.
 /// - A failed stream (send error, 2 s write stall, server error, closed socket,
 ///   no final answer within 8 s of stop) makes the shared streaming layer
-///   re-upload the whole recording to batch `scribe_v2` instead of pasting partial text.
+///   re-upload the whole recording to the mode's batch model (`scribe_v3` in the managed
+///   mode) instead of pasting partial text.
 final class ScribeRealtimeProvider: StreamingTranscriptionProvider {
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "OKLabsScribe")
     private let vocabularyTerms: [String]
@@ -70,9 +74,12 @@ final class ScribeRealtimeProvider: StreamingTranscriptionProvider {
             logger.warning("Scribe keyterms dropped: \(selection.dropSummary, privacy: .public)")
         }
         let endpoint = OKLabsSettings.scribeEndpoint ?? ScribeLimits.defaultEndpoint
+        let realtimeModel = ScribeModels.realtimeModel(
+            forSelected: model.name, override: OKLabsSettings.scribeRealtimeModel)
         let url: URL
         do {
-            url = try ScribeURL.build(endpoint: endpoint, language: language, keyterms: selection.terms)
+            url = try ScribeURL.build(
+                endpoint: endpoint, model: realtimeModel, language: language, keyterms: selection.terms)
         } catch {
             throw StreamingTranscriptionError.connectionFailed(error.localizedDescription)
         }
@@ -97,7 +104,7 @@ final class ScribeRealtimeProvider: StreamingTranscriptionProvider {
             throw StreamingTranscriptionError.connectionFailed(error.message)
         }
         logger.notice(
-            "Scribe connected language=\(ScribeURL.normalizedLanguage(language) ?? "auto", privacy: .public) keyterms=\(selection.terms.count, privacy: .public) elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s"
+            "Scribe connected model=\(realtimeModel, privacy: .public) language=\(ScribeURL.normalizedLanguage(language) ?? "auto", privacy: .public) keyterms=\(selection.terms.count, privacy: .public) elapsed=\(Date().timeIntervalSince(start), format: .fixed(precision: 3), privacy: .public)s"
         )
         eventsContinuation.yield(.sessionStarted)
     }
