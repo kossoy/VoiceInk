@@ -1,11 +1,12 @@
 import Foundation
 import ScribeCore
 
-/// Batch `scribe_v2` over REST, with the parameters VoiceInk's batch fallback uses
+/// Batch Scribe (`scribe_v2` by default) over REST, with the parameters VoiceInk's batch fallback uses
 /// (LLMkit `ElevenLabsClient`: temperature 0, no audio events, no_verbatim, keyterms).
 public struct BatchScribe: Sendable {
     public let apiKey: String
     public let keyterms: [String]
+    public var model = ScribeModels.batchV2
     public var endpoint = URL(string: "https://api.elevenlabs.io/v1/speech-to-text")!
     public var timeout: TimeInterval = 60
 
@@ -26,7 +27,7 @@ public struct BatchScribe: Sendable {
                     .utf8))
         body.append(BenchAudio.wav16k(samples))
         body.append(Data("\r\n".utf8))
-        field("model_id", "scribe_v2")
+        field("model_id", model)
         field("temperature", "0.0")
         field("tag_audio_events", "false")
         field("no_verbatim", "true")
@@ -60,6 +61,7 @@ public struct LiveScribe: Sendable {
     public let apiKey: String
     public let keyterms: [String]
     public var endpoint = ScribeLimits.defaultEndpoint
+    public var model = ScribeLimits.realtimeModel
     public var language: String? = nil
 
     public init(apiKey: String, keyterms: [String]) {
@@ -83,7 +85,7 @@ public struct LiveScribe: Sendable {
     /// Streams `samples` in 10 ms render-sized chunks; `realtime` paces them at 1x
     /// like a microphone, otherwise they go out as fast as the socket takes them.
     public func run(_ samples: [Int16], realtime: Bool) async throws -> Result {
-        let url = try ScribeURL.build(endpoint: endpoint, language: language, keyterms: keyterms)
+        let url = try ScribeURL.build(endpoint: endpoint, model: model, language: language, keyterms: keyterms)
         // At 1x the app's 8 s final wait applies. At upload speed the same wait would
         // also have to cover sending the whole file, so give it what voxtype gives an
         // upload (timeout + audio/2); frames stay 100 ms, as in the app.
