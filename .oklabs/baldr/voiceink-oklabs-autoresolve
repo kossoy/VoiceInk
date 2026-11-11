@@ -42,7 +42,12 @@ case "${1:-}" in
     *) echo "unknown argument: $1" >&2; exit 64 ;;
 esac
 
-ORIGIN=${VIAR_ORIGIN:-github-voiceink:kossoy/VoiceInk.git}
+ORIGIN=${VIAR_ORIGIN:-https://github.com/kossoy/VoiceInk.git}
+# Push identity: GitHub App kossoy-voiceink-autoresolve (installed on kossoy/VoiceInk
+# only, contents:write). Repository ruleset keeps it out of every branch except
+# oklabs/auto-resolve/**. Key canon: Infisical services:/voiceink-autoresolve.
+APP_CLIENT_ID=${VIAR_APP_CLIENT_ID:-Iv23lia82SSjWuDu9ah2}
+APP_KEY=${VIAR_APP_KEY:-$HOME/.config/voiceink-autoresolve/app.pem}
 UPSTREAM=${VIAR_UPSTREAM:-https://github.com/Beingpax/VoiceInk.git}
 UPSTREAM_REF=${VIAR_UPSTREAM_REF:-main}
 STATE=${VIAR_STATE:-$HOME/.local/state/voiceink-oklabs}
@@ -298,6 +303,10 @@ if [ "$NO_PUSH" = 1 ]; then
     log "no push (dry run/test): candidate ${C:0:10} kept as refs/autoresolve/$RUN in $REPO"
     exit 0
 fi
-git push -q --force-with-lease="refs/heads/$BRANCH:" origin "$C:refs/heads/$BRANCH" >>"$RUNLOG" 2>&1 ||
+# Fresh 1 h installation token per push; passed to git through GIT_ASKPASS env only.
+GH_APP_TOKEN=$("$HOME/.local/bin/gh-app-token" "$APP_CLIENT_ID" "$APP_KEY" kossoy/VoiceInk 2>>"$RUNLOG") ||
+    fail "GitHub App token unavailable (key $APP_KEY)"
+GH_APP_TOKEN=$GH_APP_TOKEN GIT_ASKPASS=$HOME/.local/bin/gh-app-askpass GIT_TERMINAL_PROMPT=0 \
+    git -c credential.helper= push -q --force-with-lease="refs/heads/$BRANCH:" origin "$C:refs/heads/$BRANCH" >>"$RUNLOG" 2>&1 ||
     fail "push of $BRANCH rejected"
 log "pushed $BRANCH = ${C:0:10}; oklabs-autoresolve-pr.yml opens the PR and sends Telegram"
