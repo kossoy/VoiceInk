@@ -24,7 +24,9 @@ import MeetingCore
 // is available". The web tree is readable without waking: AXManualAccessibility /
 // AXEnhancedUserInterface writes fail (-25205/-25208), so the observer never writes to Teams.
 //
-// Off unless the user default `oklabs.meeting.teamsSpeakerObserver` is true.
+// On by default; `defaults write com.prakashjoshipax.VoiceInk oklabs.meeting.teamsSpeakerObserver
+// -bool NO` turns it off (an explicit value always wins). Needs Accessibility, which VoiceInk
+// already has for pasting text; without it the observer stays idle.
 
 /// Every Teams-specific string the observer matches, in one place.
 public enum TeamsAXSelectors {
@@ -380,9 +382,16 @@ public enum TeamsAXReader {
 /// Polls Teams while a meeting recording runs and reports closed cues. Read-only.
 @MainActor
 public final class TeamsSpeakerObserver {
-    public static let enabledKey = "oklabs.meeting.teamsSpeakerObserver"
-    public static func isEnabled(_ defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: enabledKey)
+    nonisolated public static let enabledKey = "oklabs.meeting.teamsSpeakerObserver"
+    /// Registered default: on. A value the user set (true or false) overrides it.
+    nonisolated public static let defaultValue = true
+
+    nonisolated public static func registerDefault(in defaults: UserDefaults = .standard) {
+        defaults.register(defaults: [enabledKey: defaultValue])
+    }
+
+    nonisolated public static func isEnabled(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: enabledKey) as? Bool ?? defaultValue
     }
 
     private let interval: TimeInterval

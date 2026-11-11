@@ -251,4 +251,17 @@ final class TeamsSpeakerObserverTests: XCTestCase {
         XCTAssertGreaterThan(covered, 560)   // probe at 4c67596: 582.9 s cue union, 97%
         XCTAssertTrue((15...40).contains(cues.count), "\(cues.count) cues")
     }
+
+    func testObserverIsOnByDefaultAndUserFalseWins() {
+        let suite = "TeamsSpeakerObserverTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(TeamsSpeakerObserver.isEnabled(defaults))
+        TeamsSpeakerObserver.registerDefault(in: defaults)
+        XCTAssertTrue(TeamsSpeakerObserver.isEnabled(defaults))
+        defaults.set(false, forKey: TeamsSpeakerObserver.enabledKey)
+        XCTAssertFalse(TeamsSpeakerObserver.isEnabled(defaults))
+        defaults.set(true, forKey: TeamsSpeakerObserver.enabledKey)
+        XCTAssertTrue(TeamsSpeakerObserver.isEnabled(defaults))
+    }
 }

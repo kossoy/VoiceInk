@@ -41,4 +41,5 @@ D=~/work/qa-evidence/teams-ax-$(date +%Y%m%d-%H%M); mkdir -p "$D"
   got the border; the probe would report it as `(self)`, the observer excludes it.
 
 Coverage by capture: compact-view only 1.8% of the call; main window in front 97.1%.
-The observer uses both signals; the main-window border is the primary one.
+The observer uses both signals; the main-window border is the primary one. It is on by default
+(`oklabs.meeting.teamsSpeakerObserver`; set it to NO to turn it off).

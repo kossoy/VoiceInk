@@ -37,11 +37,20 @@ Each line takes the voice that covers most of it and shows "Speaker N" until nam
 a speaker renames that voice everywhere or names only that line; names live in `session.json`
 (schema 2) and survive "Detect Speakers Again". Precedence, strongest first: the user's name
 for the line, the user's name for the voice, complete meeting-app cues for the line, the
-voice's cue majority (`MeetingSpeakerNaming`, ready for a Teams Accessibility observer),
+voice's cue majority (`MeetingSpeakerNaming`, fed by the Teams Accessibility observer below),
 Speaker N, Others. The microphone is always Me. Models download once from Hugging Face into
 FluidAudio's model cache; nothing else leaves the Mac. Older meetings: open one and use
 Detect Speakers. Measure on a saved meeting without the app: `.oklabs/diarization-bench`. Off switch:
 `defaults write com.prakashjoshipax.VoiceInk OKLabsMeetingSpeakerDiarization -bool NO`.
+
+Teams speaker names (`MeetingSystem/TeamsSpeakerObserver.swift`, on by default): while a meeting
+records, VoiceInk reads Teams desktop's Accessibility tree at 4 Hz, read-only. The purple border
+of the active speaker's tile (main call window in front) or the compact view's "<Name> is
+speaking" label become speaker cues on the session clock, and the voice clusters take the
+majority name. Measured on live calls: 97% of the call named with the main window in front,
+compact view alone 2%. The user's own tile is ignored. Details and captures:
+`.oklabs/meeting-probe/LIVE-CALL.md`. Off switch:
+`defaults write com.prakashjoshipax.VoiceInk oklabs.meeting.teamsSpeakerObserver -bool NO`.
 It needs the FluidAudio `Diarizer` package trait in `project.pbxproj` (fork contract):
 with `traits = ( )` Xcode 26+ compiles FluidAudio without its diarizer.
 
