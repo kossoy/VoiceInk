@@ -1,0 +1,10 @@
+[Unit]
+Description=voiceink-oklabs-autoresolve after the nightly GitHub sync (01:17 UTC) and every 6 h
+
+[Timer]
+OnCalendar=*-*-* 02,08,14,20:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

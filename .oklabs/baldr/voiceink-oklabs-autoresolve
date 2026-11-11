@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+# voiceink-oklabs-autoresolve: resolve an upstream merge conflict of the VoiceInk fork
+# (kossoy/VoiceInk <- Beingpax/VoiceInk) with Claude Code and push it for review.
+#
+# The nightly oklabs-sync workflow on GitHub merges clean upstream changes itself and stops
+# on a conflict. This script (baldr user timer, after the nightly sync) finds such a
+# conflict, lets ~/.local/bin/oklabs-agent resolve the conflicted files and then review the
+# merge, enforces guards, and pushes ONE merge commit to oklabs/auto-resolve/<upstream sha10>.
+# GitHub then runs oklabs-test on it, and oklabs-autoresolve-pr.yml opens the PR and sends
+# the Telegram message. Nothing is ever merged into main here: merge is Oleg's.
+#
+# Guards (script-enforced, the agent cannot relax them):
+#   - the final tree differs from `git merge-tree --write-tree main upstream` only in the
+#     conflicted paths; no conflict markers; no unmerged entries; nothing else changed
+#   - every check runs from a private export of origin/main's .oklabs/ (cwd there, python -I,
+#     PYTHONSAFEPATH), never from the incoming merge worktree: check-fork-contracts.py with its
+#     manifest (candidate passed by sha, repo by GIT_DIR), .oklabs/ci/tests/sync.sh and the
+#     fork guard unittests
+#   - one pending PR at a time: any oklabs/auto-resolve/* branch on origin = quiet exit
+#     (oklabs-autoresolve-pr.yml deletes it when its PR is closed; merge deletes it too)
+#   - one attempt per upstream commit (state marker)
+#   - the agent runs in oklabs-agent's bubblewrap sandbox (read-only fs, no ~/.ssh or
+#     Infisical identity, no project settings/MCP from the worktree); the push happens here
+#
+# Quiet exits (no message): upstream already in main, clean merge (the GitHub sync handles
+# it), an auto-resolve branch (pending PR) on origin, upstream commit already attempted.
+# Failure: no push, one Telegram message (bot MAESTRO_BOT_TOKEN from Infisical, chat 79510949).
+#
+# usage: voiceink-oklabs-autoresolve [--dry-run] [--help]
+#   --dry-run   do everything except the push and the Telegram message
+# Env (tests): VIAR_ORIGIN, VIAR_UPSTREAM (remote URLs), VIAR_STATE, VIAR_CACHE (dirs),
+#   VIAR_AGENT (agent command, same args as oklabs-agent), VIAR_TG_CHAT (empty = off; off by
+#   default when VIAR_ORIGIN or VIAR_STATE is set), VIAR_NO_PUSH=1, VIAR_UPSTREAM_REF.
+set -euo pipefail
+export LC_ALL=C.UTF-8 GIT_PAGER=cat GIT_TERMINAL_PROMPT=0
+
+DRY=0
+case "${1:-}" in
+    --dry-run) DRY=1 ;;
+    -h | --help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    "") ;;
+    *) echo "unknown argument: $1" >&2; exit 64 ;;
+esac
+
+ORIGIN=${VIAR_ORIGIN:-github-voiceink:kossoy/VoiceInk.git}
+UPSTREAM=${VIAR_UPSTREAM:-https://github.com/Beingpax/VoiceInk.git}
+UPSTREAM_REF=${VIAR_UPSTREAM_REF:-main}
+STATE=${VIAR_STATE:-$HOME/.local/state/voiceink-oklabs}
+CACHE=${VIAR_CACHE:-$HOME/.cache/voiceink-oklabs}
+AGENT=${VIAR_AGENT:-$HOME/.local/bin/oklabs-agent}
+SECRET=$HOME/.local/bin/secret
+if [ -n "${VIAR_ORIGIN:-}${VIAR_STATE:-}" ]; then TG_CHAT=${VIAR_TG_CHAT:-}; else TG_CHAT=${VIAR_TG_CHAT-79510949}; fi
+NO_PUSH=${VIAR_NO_PUSH:-$DRY}
+PREFIX=oklabs/auto-resolve/
+REPO=$CACHE/repo
+RUN=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$STATE/runs" "$STATE/attempted" "$CACHE"
+LOGF=$STATE/autoresolve.log
+RUNLOG=$STATE/runs/$RUN.log
+BUILDER=$(hostname -s)
+
+log() { printf '%s %s\n' "$(date -Iseconds)" "$*" | tee -a "$LOGF" >&2; }
+th() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+exec 9>"$STATE/autoresolve.lock"
+flock -n 9 || { echo "another run holds $STATE/autoresolve.lock" >&2; exit 0; }
+
+tg() { # html text
+    local text=$1 token code
+    if [ "$DRY" = 1 ] || [ -z "$TG_CHAT" ]; then
+        log "telegram off (dry run or test); message:"; printf '%s\n' "$text" >>"$LOGF"; return 0
+    fi
+    token=$(timeout 120 "$SECRET" get external /telegram MAESTRO_BOT_TOKEN 2>/dev/null) || token=""
+    token=${token//[$'\r\n']/}
+    [ -n "$token" ] || { log "WARN telegram: no bot token from Infisical"; return 0; }
+    for mode in HTML plain; do
+        local -a pm=()
+        local body=$text
+        if [ "$mode" = HTML ]; then pm=(--data-urlencode parse_mode=HTML); else body=$(printf '%s' "$text" | sed -e 's/<[^>]*>//g' -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'); fi
+        code=$(printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$token" |
+            curl -sS -m 20 --retry 3 --retry-delay 10 -K - -o /dev/null -w '%{http_code}' \
+                --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$body" \
+                --data-urlencode disable_web_page_preview=true "${pm[@]}") || code=000
+        if [ "$code" = 200 ]; then log "telegram sent ($mode)"; return 0; fi
+        log "WARN telegram $mode failed: HTTP $code"
+        [ "$code" = 400 ] || return 0
+    done
+}
+
+U="" SUBJ="" CONFLICTED=()
+fail() { # reason
+    local reason=$1 files="" f
+    log "FAIL: $reason (log $RUNLOG)"
+    for f in "${CONFLICTED[@]}"; do files="${files:+$files, }<code>$(th "$f")</code>"; done
+    tg "<b>VoiceInk auto-resolve не справился</b>
+Merge Beingpax main <code>${U:0:10}</code> $(th "${SUBJ:0:90}")
+Файлы: ${files:-не определены}
+Причина: $(th "${reason:0:300}")
+Ничего не pushed. Fix вручную: .oklabs/README.md, раздел Sync (git merge upstream/main на ветке от origin/main, PR с merge commit).
+Log:
+<pre>ssh $BUILDER tail -n 80 $(th "$RUNLOG")</pre>"
+    exit 1
+}
+
+log "=== run $RUN on $BUILDER (dry_run=$DRY no_push=$NO_PUSH)"
+# Keep the newest 60 run logs.
+ls -1t "$STATE/runs" 2>/dev/null | tail -n +61 | while read -r old; do rm -f "$STATE/runs/$old"; done
+if [ ! -d "$REPO/.git" ]; then
+    git init -q "$REPO"
+    git -C "$REPO" remote add origin "$ORIGIN"
+    git -C "$REPO" remote add upstream "$UPSTREAM"
+fi
+git -C "$REPO" remote set-url origin "$ORIGIN"
+git -C "$REPO" remote set-url upstream "$UPSTREAM"
+git -C "$REPO" config user.name "Oleg Kossoy"
+git -C "$REPO" config user.email "51094+kossoy@users.noreply.github.com"
+git -C "$REPO" worktree prune
+if ! git -C "$REPO" fetch -q --no-tags origin "+refs/heads/main:refs/remotes/origin/main" 2>>"$RUNLOG" ||
+    ! git -C "$REPO" fetch -q --no-tags upstream "+refs/heads/$UPSTREAM_REF:refs/remotes/upstream/main" 2>>"$RUNLOG"; then
+    # Network trouble is not worth a message: the next run tries again.
+    log "fetch failed; next run tries again ($(tail -n 1 "$RUNLOG"))"
+    exit 0
+fi
+M=$(git -C "$REPO" rev-parse refs/remotes/origin/main)
+U=$(git -C "$REPO" rev-parse refs/remotes/upstream/main)
+SUBJ=$(git -C "$REPO" log -1 --format=%s "$U")
+BRANCH=$PREFIX${U:0:10}
+
+if git -C "$REPO" merge-base --is-ancestor "$U" "$M"; then
+    log "upstream ${U:0:10} already in main ${M:0:10}; nothing to do"; rm -f "$RUNLOG"; exit 0
+fi
+set +e
+MT_OUT=$(git -C "$REPO" merge-tree --write-tree --name-only --no-messages "$M" "$U")
+mt=$?
+set -e
+[ "$mt" -le 1 ] || fail "git merge-tree failed (exit $mt)"
+MT=$(printf '%s\n' "$MT_OUT" | head -1)
+if [ "$mt" = 0 ]; then
+    log "upstream ${U:0:10} merges cleanly into main ${M:0:10}; the GitHub sync handles it"; rm -f "$RUNLOG"; exit 0
+fi
+mapfile -t CONFLICTED < <(printf '%s\n' "$MT_OUT" | tail -n +2 | sed '/^$/d' | sort -u)
+set +e
+PENDING=$(git -C "$REPO" ls-remote origin "refs/heads/$PREFIX*" 2>>"$RUNLOG")
+rc=$?
+set -e
+if [ "$rc" != 0 ]; then log "ls-remote failed; next run tries again"; exit 0; fi
+if [ -n "$PENDING" ]; then
+    log "pending auto-resolve PR branch on origin ($(printf '%s' "$PENDING" | awk '{sub("refs/heads/","",$2); print $2}' | tr '\n' ' ')); close or merge its PR to let the next attempt run"
+    rm -f "$RUNLOG"; exit 0
+fi
+if [ -e "$STATE/attempted/$U" ] && [ "${VIAR_RETRY:-0}" != 1 ]; then
+    log "upstream ${U:0:10} already attempted ($(cat "$STATE/attempted/$U")); rm that file to retry"; rm -f "$RUNLOG"; exit 0
+fi
+[ "$DRY" = 1 ] || printf '%s %s\n' "$RUN" "main=${M:0:10}" >"$STATE/attempted/$U"
+log "conflict: main ${M:0:10} + upstream ${U:0:10} \"$SUBJ\" in ${CONFLICTED[*]}; resolving (log $RUNLOG)"
+
+WT=$CACHE/work-$RUN
+TRUST=$CACHE/trusted-$RUN
+cleanup() { git -C "$REPO" worktree remove --force "$WT" 2>/dev/null || true; rm -rf "$TRUST" "$WT"; }
+trap cleanup EXIT
+mkdir -p "$TRUST"
+git -C "$REPO" archive "$M" .oklabs | tar -x -C "$TRUST"
+git -C "$REPO" worktree add -q --detach "$WT" "$M"
+cd "$WT"
+git -c merge.conflictstyle=diff3 merge --no-ff --no-commit "$U" >>"$RUNLOG" 2>&1 || true
+[ -f "$(git rev-parse --git-path MERGE_HEAD)" ] || fail "merge did not stop for resolution"
+mapfile -t UNMERGED < <(git diff --name-only --diff-filter=U | sort -u)
+[ "${UNMERGED[*]}" = "${CONFLICTED[*]}" ] || fail "merge conflicts (${UNMERGED[*]}) differ from merge-tree (${CONFLICTED[*]})"
+
+BODY=.oklabs-autoresolve-body.md
+REVIEW=.oklabs-autoresolve-review.md
+UPBASE=$(git merge-base "$M" "$U")
+FILES=$(printf -- '- %s\n' "${CONFLICTED[@]}")
+CONTRACTS=$(cat "$TRUST/.oklabs/ci/fork-contracts.json")
+
+cat >"$CACHE/prompt-$RUN.md" <<EOF
+You are resolving a git merge conflict in the OK Labs fork of VoiceInk (macOS, Swift).
+Working directory: a git worktree in the middle of \`git merge\` of upstream Beingpax/VoiceInk
+main ${U} ("${SUBJ}") into our fork main ${M}. Conflict style is diff3 (ours / base / theirs).
+
+Conflicted files (the ONLY files you may edit):
+${FILES}
+
+Rules:
+- Edit only the conflicted files above, plus write the file ${BODY} (see below). Any change
+  to another file makes the run fail. Do not run git commit, git merge, git checkout,
+  git reset, git stash or anything that changes refs.
+- Remove every conflict marker. Keep upstream's intent AND every fork (OK Labs) behaviour.
+  Fork code lives in VoiceInk/OKLabs/, behind #if OKLABS, and in the hooks listed in the
+  fork contract below; those snippets must stay present.
+- When upstream changed a pattern that fork code next to it uses (for example property
+  wrappers, observation, initialisation order, renamed APIs), apply the same change to the
+  fork code if it serves the same purpose, and say so in ${BODY}. Example from 2026-11-11:
+  upstream switched VoiceInkEngine from @StateObject to @State to stop re-evaluating every
+  scene; the fork's MeetingCoordinator, also only passed to environmentObject, needed the same.
+- Inspect what upstream changed: git log --oneline ${UPBASE}..${U}, git diff ${UPBASE} ${U} -- <file>,
+  and our side: git log --oneline ${UPBASE}..${M} -- <file>.
+- You cannot build or run tests here; CI compiles the app and runs swift test afterwards.
+  Be precise with Swift syntax.
+
+Fork contract (trusted manifest; required_snippets must remain in those files):
+${CONTRACTS}
+
+Finally write ${BODY} in the repository root: plain English markdown, no heading, for the
+commit body and PR description. For each conflicted file: what upstream changed, what the
+fork had, how you resolved it and why. Then a line "Follow-ups:" listing anything outside
+the conflicted files that may need a change (or "none").
+EOF
+
+cat >"$CACHE/review-$RUN.md" <<EOF
+You are reviewing a merge conflict resolution before it goes to a PR, in the OK Labs fork of
+VoiceInk (macOS, Swift). The worktree is in the middle of \`git merge\` of upstream
+Beingpax/VoiceInk ${U} ("${SUBJ}") into fork main ${M}; another agent resolved the conflicted
+files and described the resolution in ${BODY}.
+
+Conflicted files (the ONLY files you may edit):
+${FILES}
+
+Check adversarially:
+1. Leftover conflict markers, duplicated or dropped code, Swift syntax errors, wrong
+   property-wrapper initialisation (_x = State(initialValue:) vs StateObject(wrappedValue:)).
+2. Lost fork behaviour: compare with git show ${M}:<file>; every fork hook and the
+   required_snippets of the fork contract below must survive.
+3. Lost upstream behaviour: compare with git show ${U}:<file>.
+4. Semantic gaps that compile: upstream changes elsewhere in ${UPBASE}..${U} (new hooks,
+   new engines/providers, scene or observation changes, renamed settings) that fork code in
+   the conflicted files should now follow.
+Fix real problems directly in the conflicted files (same rules: no other files, no git
+commands that change refs). Then write ${REVIEW}: "Review: no changes" or a short list of
+what you changed and why. Update ${BODY} if the resolution description changed.
+
+Fork contract:
+${CONTRACTS}
+EOF
+
+log "agent: resolve"
+set +e
+"$AGENT" "$WT" "$CACHE/prompt-$RUN.md" "$RUNLOG" 40
+rc=$?
+set -e
+[ "$rc" = 0 ] || fail "agent (resolve) exited $rc"
+log "agent: review"
+set +e
+"$AGENT" "$WT" "$CACHE/review-$RUN.md" "$RUNLOG" 30
+rc=$?
+set -e
+[ "$rc" = 0 ] || fail "agent (review) exited $rc"
+rm -f "$CACHE/prompt-$RUN.md" "$CACHE/review-$RUN.md"
+
+# ---- guards ----
+[ -s "$BODY" ] || fail "agent wrote no $BODY"
+# Agent text is untrusted: drop anything that looks like our trailer.
+body=$(grep -v '^Conflicted:' "$BODY" || true)
+review=$(grep -v '^Conflicted:' "$REVIEW" 2>/dev/null || echo "Review: no report")
+rm -f "$BODY" "$REVIEW"
+[ -f "$(git rev-parse --git-path MERGE_HEAD)" ] && [ "$(git rev-parse MERGE_HEAD)" = "$U" ] && [ "$(git rev-parse HEAD)" = "$M" ] ||
+    fail "the merge state changed (HEAD or MERGE_HEAD moved)"
+for f in "${CONFLICTED[@]}"; do
+    [ -f "$f" ] || [ -L "$f" ] || continue
+    if grep -nE '^(<<<<<<<|>>>>>>>|\|\|\|\|\|\|\|)( |$)' -- "$f" >>"$RUNLOG"; then fail "conflict markers left in $f"; fi
+done
+git add -A -- "${CONFLICTED[@]}"
+extra=$(git status --porcelain --untracked-files=all | grep -v '^[MADRT]  ' || true)
+[ -z "$extra" ] || fail "unexpected worktree changes: $(printf '%s' "$extra" | tr '\n' ' ' | cut -c1-200)"
+[ -z "$(git diff --name-only --diff-filter=U)" ] || fail "unmerged entries remain"
+T=$(git write-tree)
+outside=$(git diff --name-only "$MT" "$T" | grep -vxF -f <(printf '%s\n' "${CONFLICTED[@]}") || true)
+[ -z "$outside" ] || fail "changed outside the conflicted files: $(printf '%s' "$outside" | tr '\n' ' ' | cut -c1-200)"
+
+MSG=$CACHE/msg-$RUN
+{
+    printf 'Merge Beingpax main %s (%s)\n\n' "${U:0:10}" "$SUBJ"
+    printf '%s\n\n' "$body"
+    printf '%s\n\n' "$review"
+    printf 'Auto-resolved on %s by voiceink-oklabs-autoresolve (Claude Code via oklabs-agent), run %s.\n\n' "$BUILDER" "$RUN"
+    # Last paragraph = the only trailer block; the PR workflow reads its last value.
+    printf 'Conflicted: %s\n' "${CONFLICTED[*]}"
+} >"$MSG"
+git commit -q -F "$MSG"
+rm -f "$MSG"
+C=$(git rev-parse HEAD)
+[ "$(git rev-parse HEAD^1)" = "$M" ] && [ "$(git rev-parse HEAD^2)" = "$U" ] || fail "commit is not the expected merge"
+
+log "checks from the trusted export of main: fork contracts, sync tests, fork guard unittests"
+cd "$TRUST"
+# The candidate is only an argument (sha + GIT_DIR); no code from it runs.
+env -u PYTHONPATH -u PYTHONHOME PYTHONSAFEPATH=1 GIT_DIR="$REPO/.git" \
+    python3 -I .oklabs/ci/check-fork-contracts.py --base "$M" --candidate "$C" \
+    --manifest "$TRUST/.oklabs/ci/fork-contracts.json" >>"$RUNLOG" 2>&1 || fail "fork contracts failed"
+env -u GIT_DIR -u GIT_WORK_TREE bash .oklabs/ci/tests/sync.sh >>"$RUNLOG" 2>&1 || fail "sync regression tests failed"
+env -u GIT_DIR -u GIT_WORK_TREE -u PYTHONPATH -u PYTHONHOME PYTHONSAFEPATH=1 \
+    python3 -I -m unittest discover -s .oklabs/ci/tests -p 'test_*.py' >>"$RUNLOG" 2>&1 ||
+    fail "fork guard unittests failed"
+cd "$WT"
+
+if [ "$NO_PUSH" = 1 ]; then
+    git -C "$REPO" update-ref "refs/autoresolve/$RUN" "$C"
+    log "no push (dry run/test): candidate ${C:0:10} kept as refs/autoresolve/$RUN in $REPO"
+    exit 0
+fi
+git push -q --force-with-lease="refs/heads/$BRANCH:" origin "$C:refs/heads/$BRANCH" >>"$RUNLOG" 2>&1 ||
+    fail "push of $BRANCH rejected"
+log "pushed $BRANCH = ${C:0:10}; oklabs-autoresolve-pr.yml opens the PR and sends Telegram"
