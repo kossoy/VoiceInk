@@ -13,8 +13,9 @@ import MeetingCore
 //
 // Verified on a live call (Teams 26289.204, 2026-11-11, 3+ participants):
 // - "<Name> is speaking" exists only in the "Meeting compact view" window, which Teams shows
-//   while the main call window is not in front. While it was up, the label named someone
-//   95% of the time; the main call window never carries it.
+//   while the main call window is not in front; during silence it reads "Nobody is speaking".
+//   While it was up, it named a participant 74% of the time (11.5 of 15.5 s) and said
+//   "Nobody" 21%; the main call window never carries the label.
 // - Main-window tiles are AXMenuItem "Last, First, [video is on,] Has control of production
 //   tools, [muted,] Context menu is available"; the own tile starts with "Myself video".
 //   One AXEmptyGroup with DOM class vdi-frame-occlusion sits in the gallery; whether it is
@@ -31,6 +32,8 @@ public enum TeamsAXSelectors {
     public static let bundlePrefixes = ["com.microsoft.teams2", "com.microsoft.teams"]
     /// Label suffixes announcing the active speaker, e.g. "Alex Smith is speaking" (verified).
     public static let speakingSuffixes = [" is speaking", ", speaking"]
+    /// Compact view says "Nobody is speaking" during silence (verified); not a participant.
+    public static let noSpeakerNames: Set<String> = ["nobody", "no one", "no-one", "someone"]
     /// Window that carries the speaking label; title "Meeting compact view | <meeting title>".
     public static let compactViewTitlePrefix = "Meeting compact view"
     /// Gallery frame class. Unconfirmed as the active-speaker frame; used only when the frame
@@ -79,7 +82,7 @@ public enum TeamsSpeakerParser {
         for suffix in TeamsAXSelectors.speakingSuffixes {
             guard trimmed.lowercased().hasSuffix(suffix) else { continue }
             let name = normalizeName(String(trimmed.dropLast(suffix.count)))
-            return name.isEmpty ? nil : name
+            return name.isEmpty || TeamsAXSelectors.noSpeakerNames.contains(name.lowercased()) ? nil : name
         }
         return nil
     }

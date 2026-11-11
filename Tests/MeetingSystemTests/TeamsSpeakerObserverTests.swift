@@ -5,14 +5,14 @@ import MeetingCore
 #endif
 
 // Fixtures come from a live Teams 2 call captured with `.oklabs/meeting-probe` on 2026-11-11
-// (3+ participants). Real names are replaced ("Doe, Jane", "Roe, Sam", "Morgan", "Kay, Lee");
+// (3+ participants). Real names are replaced ("Doe, Jane", "Roe, Sam", "Kay, Lee", "Poe, Pat");
 // every other word of the labels is verbatim.
 final class TeamsSpeakerObserverTests: XCTestCase {
     // Main call window tiles (AXMenuItem, first AXDescription), verbatim apart from names.
     static let tileVideoOn = "Doe, Jane, video is on, Has control of production tools, Context menu is available"
     static let tileMuted = "Roe, Sam, Has control of production tools, muted, Context menu is available"
     static let tileUnmuted = "Kay, Lee, Has control of production tools, Context menu is available"
-    static let tileSelf = "Myself video, Kossoy, Oleg, Has control of production tools, Muted, Has context menu"
+    static let tileSelf = "Myself video, Poe, Pat, Has control of production tools, Muted, Has context menu"
     static let compactTitle = "Meeting compact view | Weekly sync"
 
     func testSpeakingLabels() {
@@ -20,6 +20,7 @@ final class TeamsSpeakerObserverTests: XCTestCase {
         XCTAssertEqual(TeamsSpeakerParser.speakingName(fromLabel: "Morgan is speaking"), "Morgan")
         XCTAssertEqual(TeamsSpeakerParser.speakingName(fromLabel: "Alex Smith (Guest) is speaking"), "Alex Smith")
         XCTAssertNil(TeamsSpeakerParser.speakingName(fromLabel: "is speaking"))
+        XCTAssertNil(TeamsSpeakerParser.speakingName(fromLabel: "Nobody is speaking"))  // compact view, silence
         XCTAssertNil(TeamsSpeakerParser.speakingName(fromLabel: Self.tileMuted))
         XCTAssertNil(TeamsSpeakerParser.speakingName(fromLabel: "Unmute mic"))
     }
@@ -104,24 +105,29 @@ final class TeamsSpeakerObserverTests: XCTestCase {
     /// Replays the speaking-set changes of the live capture (600 s watch, 4 Hz polls).
     func testLiveCaptureReplay() {
         let changes: [(TimeInterval, Set<String>)] = [
-            (331.419, ["Morgan"]), (331.673, []), (331.935, ["Doe, Jane"]), (338.557, []),
-            (587.884, ["Morgan"]), (588.131, ["Roe, Sam"]), (589.666, ["Morgan"]), (591.176, []),
-            (591.433, ["Doe, Jane"]), (594.731, ["Morgan"]), (596.023, []),
+            (331.419, ["Nobody is speaking"]), (331.673, []), (331.935, ["Doe, Jane is speaking"]), (338.557, []),
+            (587.884, ["Nobody is speaking"]), (588.131, ["Roe, Sam is speaking"]),
+            (589.666, ["Nobody is speaking"]), (591.176, []), (591.433, ["Doe, Jane is speaking"]),
+            (594.731, ["Nobody is speaking"]), (596.023, []),
         ]
         var tracker = TeamsSpeakerTracker()
         var cues: [MeetingSpeakerCue] = []
-        var current: Set<String> = []
+        var labels: Set<String> = []
         var next = 0
         for tick in 0...2_400 {
             let t = Double(tick) * 0.25
-            while next < changes.count, changes[next].0 <= t { current = changes[next].1; next += 1 }
-            cues += tracker.observe(TeamsSpeakerSnapshot(speaking: current, fingerprint: tick), at: t)
+            while next < changes.count, changes[next].0 <= t { labels = changes[next].1; next += 1 }
+            let nodes = labels.map {
+                TeamsAXNode(role: "AXGroup", labels: [$0], windowTitle: Self.compactTitle)
+            }
+            let snapshot = TeamsSpeakerSnapshot.from(nodes: nodes)
+            cues += tracker.observe(TeamsSpeakerSnapshot(speaking: snapshot.speaking, fingerprint: tick), at: t)
         }
         cues += tracker.finish(at: 600)
-        XCTAssertEqual(Set(cues.map(\.displayName)), ["Morgan", "Doe, Jane", "Roe, Sam"])
+        XCTAssertEqual(Set(cues.map(\.displayName)), ["Doe, Jane", "Roe, Sam"])
         let covered = cues.reduce(0) { $0 + $1.range.end - $1.range.start }
-        XCTAssertGreaterThan(covered, 10)
-        XCTAssertLessThan(covered, 20)  // ~2-3% of the call: the label exists only in compact view
+        XCTAssertGreaterThan(covered, 8)
+        XCTAssertLessThan(covered, 16)  // ~2% of the call: the label exists only in compact view
         XCTAssertTrue(cues.allSatisfy { (331...597).contains($0.range.start) })
     }
 

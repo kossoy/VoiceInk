@@ -19,8 +19,9 @@ D=~/work/qa-evidence/teams-ax-$(date +%Y%m%d-%H%M); mkdir -p "$D"
 ## Findings, call of 2026-11-11 (Teams 26289.204, 3+ participants, 600 s watch)
 
 - "<Name> is speaking" exists only in the **Meeting compact view** window, which Teams shows
-  while the main call window is not in front. Compact view was up 15.5 s; a name was shown
-  95% of that time (14.8 s), giving 6 cues for 3 people (13.4 s, 2.2% of the call).
+  while the main call window is not in front; in silence it reads "Nobody is speaking"
+  (the probe's third "name" was this). Compact view was up 15.5 s: a participant named 11.5 s
+  (74%), "Nobody" 3.3 s, empty 0.7 s. That gives 3 cues for 2 people, 10.6 s, 1.8% of the call.
 - The main call window never carries a speaking label. Tiles are AXMenuItem labels
   "Last, First, [video is on,] Has control of production tools, [muted,] Context menu is
   available"; the own tile starts with "Myself video". One AXEmptyGroup with DOM class
