@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Mint a GitHub App installation token for one repo (stdlib + openssl CLI).
+
+usage: gh-app-token.py <client-id> <private-key.pem> <owner/repo>
+Prints the token (valid 1 h) on stdout. Requested permissions: contents:write.
+"""
+import base64, json, subprocess, sys, time, urllib.request
+
+client_id, key, repo = sys.argv[1:4]
+b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=")
+now = int(time.time())
+head = b64(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+body = b64(json.dumps({"iat": now - 60, "exp": now + 540, "iss": client_id}).encode())
+sig = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key],
+                     input=head + b"." + body, capture_output=True, check=True).stdout
+jwt = (head + b"." + body + b"." + b64(sig)).decode()
+
+def call(method, url, token, data=None, scheme="Bearer"):
+    req = urllib.request.Request(url, method=method, data=data and json.dumps(data).encode(),
+                                 headers={"Authorization": f"{scheme} {token}",
+                                          "Accept": "application/vnd.github+json",
+                                          "User-Agent": "oklabs-autoresolve"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+inst = call("GET", f"https://api.github.com/repos/{repo}/installation", jwt)
+tok = call("POST", f"https://api.github.com/app/installations/{inst['id']}/access_tokens", jwt,
+           {"repositories": [repo.split("/")[1]], "permissions": {"contents": "write"}})
+print(tok["token"])
