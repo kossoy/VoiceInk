@@ -9,6 +9,23 @@ public struct MeetingAudioJob: Codable, Identifiable, Equatable, Sendable {
     public let language: String?
     public var state: State
     public var error: String?
+    /// Transient failures of this chunk so far (auto-retried). Absent in job files written
+    /// before auto-retry, decoded as 0.
+    public var attempts: Int = 0
+
+    private enum CodingKeys: String, CodingKey { case id, source, range, modelKey, language, state, error, attempts }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        source = try c.decode(MeetingAudioSource.self, forKey: .source)
+        range = try c.decode(MeetingTimeRange.self, forKey: .range)
+        modelKey = try c.decode(String.self, forKey: .modelKey)
+        language = try c.decodeIfPresent(String.self, forKey: .language)
+        state = try c.decode(State.self, forKey: .state)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+        attempts = try c.decodeIfPresent(Int.self, forKey: .attempts) ?? 0
+    }
 
     public init(chunk: MeetingAudioChunk, modelKey: String, language: String?) {
         id = UUID()

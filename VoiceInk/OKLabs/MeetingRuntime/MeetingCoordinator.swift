@@ -1,6 +1,8 @@
 import AppKit
 import Combine
 import Foundation
+import LLMkit
+import Network
 import UniformTypeIdentifiers
 
 @MainActor
@@ -44,6 +46,17 @@ final class MeetingCoordinator: ObservableObject {
     private var selectedModel: (any TranscriptionModel)?
     private var language: String?
     private var queueIsSuspended = false
+    /// Transient failures (timeouts, dropped connections, 408/429/5xx) keep the chunk pending
+    /// and schedule this retry instead of suspending the queue. See `MeetingRetryBackoff`.
+    private var backoff = MeetingRetryBackoff()
+    private var retryTask: Task<Void, Never>?
+    /// The status line currently shown for a retry wait; cleared only if still ours.
+    private var retryMessage: String?
+    private var retrySurfaced = false
+    private let networkMonitor = NWPathMonitor()
+    private var networkIsAvailable = true
+    /// Waiting for the network to come back (offline failure), in place of a timed retry.
+    @Published private(set) var isWaitingToRetry = false
     private let diarizer = MeetingDiarizer()
     /// Teams Accessibility speaker names (on by default; `oklabs.meeting.teamsSpeakerObserver`
     /// = false turns it off). Its cues name the diarization clusters by majority vote (MeetingSpeakerNaming).
@@ -72,6 +85,11 @@ final class MeetingCoordinator: ObservableObject {
             ?? MeetingScribeDiarizer.hasAPIKey
         selectedModelKey = Self.defaultModelKey(models)
         refreshSavedMeetings()
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            let available = path.status == .satisfied
+            Task { @MainActor in self?.networkDidChange(available: available) }
+        }
+        networkMonitor.start(queue: DispatchQueue(label: "MeetingCoordinator.network"))
     }
 
     /// The dictation model, except that ElevenLabs Scribe V2 is upgraded to Scribe V3 for
@@ -225,7 +243,7 @@ final class MeetingCoordinator: ObservableObject {
     }
 
     private func processQueue() {
-        guard worker == nil, pendingCount > 0, !queueIsSuspended else { return }
+        guard worker == nil, retryTask == nil, pendingCount > 0, !queueIsSuspended else { return }
         isTranscribing = true
         engine.isMeetingActive = true
         worker = Task { [weak self] in
@@ -255,15 +273,26 @@ final class MeetingCoordinator: ObservableObject {
                     job.state = .completed
                     job.error = nil
                     try jobStore.save(job)
+                    self.transientStreakEnded()
+                } catch is CancellationError {
+                    break
                 } catch {
-                    job.state = .failed
+                    let kind = MeetingFailureClassifier.classify(MeetingFailureSignal(error: error))
                     job.error = error.localizedDescription
-                    self.message = "Transcription failed. Audio is saved locally. Use Retry after resolving the error."
+                    if kind == .permanent {
+                        job.state = .failed
+                        self.message = "Transcription failed. Audio is saved locally. Use Retry after resolving the error."
+                        self.queueIsSuspended = true
+                    } else {
+                        // The chunk stays pending and first in line, so segment order is kept.
+                        if kind == .transient && self.networkIsAvailable { job.attempts += 1 }
+                    }
                     do { try jobStore.save(job) } catch { self.message = "Could not save queue status: \(error.localizedDescription)" }
-                    self.queueIsSuspended = true
+                    self.jobs[index] = job
+                    if kind != .permanent { self.scheduleRetry(kind: kind) }
+                    break
                 }
                 self.jobs[index] = job
-                if self.queueIsSuspended { break }
             }
             self.refreshSavedMeetings()
         }
@@ -271,6 +300,8 @@ final class MeetingCoordinator: ObservableObject {
 
     func retry() {
         guard !isTranscribing, engine.recordingState == .idle else { return }
+        cancelScheduledRetry()
+        backoff.reset()
         do {
             for index in jobs.indices where jobs[index].state == .failed {
                 jobs[index].state = .pending
@@ -304,6 +335,8 @@ final class MeetingCoordinator: ObservableObject {
             // The cloud refinement is optional: unreadable means "not there".
             scribeDiarization = (try? store.loadScribeDiarization(id: recovered.id)) ?? nil
             jobStore = audioStore
+            cancelScheduledRetry()
+            backoff.reset()
             queueIsSuspended = true
             message = pendingCount + failedCount > 0 ? "Recovered audio is ready. Retry to transcribe pending chunks." : nil
             microphoneLevel = 0
@@ -341,6 +374,72 @@ final class MeetingCoordinator: ObservableObject {
         guard let session else { return }
         do { try store.save(session); refreshSavedMeetings() }
         catch { message = "Could not save transcript: \(error.localizedDescription)" }
+    }
+
+    // MARK: - Transient failure retry
+
+    private func scheduleRetry(kind: MeetingFailureKind) {
+        let offline = kind == .offline || !networkIsAvailable
+        let delay: TimeInterval
+        if offline {
+            backoff.recordOffline(at: Date())
+            delay = 60
+        } else {
+            delay = backoff.recordFailure(at: Date())
+        }
+        let surfaced = backoff.shouldSurface(at: Date())
+        let line = MeetingRetryBackoff.statusLine(
+            kind: offline ? .offline : .transient, retryIn: delay, pending: pendingCount, surfaced: surfaced)
+        if message == nil || message == retryMessage {
+            message = line
+            retryMessage = line
+            retrySurfaced = surfaced
+        }
+        isWaitingToRetry = true
+        retryTask?.cancel()
+        retryTask = Task { [weak self] in
+            // Offline: wake as soon as the network path is back (checked every second), at the
+            // latest after a minute, so a stale path status cannot stall the queue.
+            let deadline = Date().addingTimeInterval(delay)
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                if offline && self.networkIsAvailable { break }
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.retryTask = nil
+            self.isWaitingToRetry = false
+            self.processQueue()
+        }
+    }
+
+    /// The message is the calm auto-retry status (shown in secondary style, not as a failure).
+    var messageIsCalmRetryStatus: Bool { message != nil && message == retryMessage && !retrySurfaced }
+
+    private func cancelScheduledRetry() {
+        retryTask?.cancel()
+        retryTask = nil
+        isWaitingToRetry = false
+        if message != nil && message == retryMessage { message = nil }
+        retryMessage = nil
+    }
+
+    private func transientStreakEnded() {
+        guard backoff.isFailing else { return }
+        backoff.reset()
+        if message != nil && message == retryMessage { message = nil }
+        retryMessage = nil
+    }
+
+    private func networkDidChange(available: Bool) {
+        let cameBack = available && !networkIsAvailable
+        networkIsAvailable = available
+        guard cameBack, retryTask != nil else { return }
+        // Network is back: try now instead of waiting out the backoff.
+        retryTask?.cancel()
+        retryTask = nil
+        isWaitingToRetry = false
+        processQueue()
     }
 
     private func releaseDictationIfFinished() {
@@ -472,5 +571,45 @@ final class MeetingCoordinator: ObservableObject {
                 .write(to: url, atomically: true, encoding: .utf8)
         }
         catch { message = error.localizedDescription }
+    }
+}
+
+// MARK: - Failure classification input
+
+extension MeetingFailureSignal {
+    /// Maps the app's transcription errors to the provider-neutral signal `MeetingFailureClassifier` reads.
+    init(error: Error) {
+        self.init(message: error.localizedDescription)
+        switch error {
+        case let cloud as CloudTranscriptionError:
+            switch cloud {
+            case .apiRequestFailed(let status, _):
+                httpStatus = status
+            case .networkError(let inner):
+                self = MeetingFailureSignal(error: inner)
+                if urlErrorCode == nil && httpStatus == nil { isGenericNetwork = true }
+            case .missingAPIKey, .invalidAPIKey, .audioFileNotFound, .unsupportedProvider, .unsupportedModel,
+                .dataEncodingError, .noTranscriptionReturned:
+                isKnownPermanent = true
+            }
+        case let kit as LLMKitError:
+            switch kit {
+            case .timeout: isTimeout = true
+            case .networkError: isGenericNetwork = true
+            case .httpError(let status, _): httpStatus = status
+            default: isKnownPermanent = true
+            }
+        case let url as URLError:
+            urlErrorCode = url.errorCode
+        default:
+            let ns = error as NSError
+            if ns.domain == NSURLErrorDomain {
+                urlErrorCode = ns.code
+            } else if ns.domain == "LLMkit" {
+                isGenericNetwork = true
+            } else if ns.domain == "Meeting" {
+                isKnownPermanent = true
+            }
+        }
     }
 }
