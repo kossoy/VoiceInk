@@ -92,7 +92,9 @@ struct MeetingWindowView: View {
             Text("Microphone + audio from other apps · Saved on this Mac · Headphones recommended")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let message = meeting.message {
-                Text(message).font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+                Text(message).font(.callout)
+                    .foregroundStyle(meeting.messageIsCalmRetryStatus ? Color.secondary : Color.orange)
+                    .textSelection(.enabled)
             }
         }
     }
@@ -236,7 +238,8 @@ struct MeetingWindowView: View {
                     .help("Separate the voices from other apps on this Mac. Names you gave are kept.")
                 }
                 if meeting.failedCount + meeting.pendingCount > 0 && !meeting.isTranscribing {
-                    Button("Retry") { meeting.retry() }.disabled(meeting.isChangingCapture)
+                    Button(meeting.isWaitingToRetry ? "Retry Now" : "Retry") { meeting.retry() }
+                        .disabled(meeting.isChangingCapture)
                 }
                 Button("Copy") { meeting.copyTranscript() }.disabled(meeting.session == nil)
                 Button("Export…") { meeting.export() }.disabled(meeting.session == nil)
