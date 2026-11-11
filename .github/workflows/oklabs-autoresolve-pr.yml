@@ -4,11 +4,17 @@
 # resolution. That push also starts oklabs-test (swift test + app compile) on the same SHA,
 # so its checks show on this PR. The PR is never merged automatically: Oleg reviews it and
 # merges with a merge commit (no squash/rebase). One Telegram message per new PR.
+# The resolver keeps one pending PR at a time: closing the PR without merging deletes its
+# branch here (a merge deletes it through delete_branch_on_merge), so the next attempt runs.
+# Every string from the commit (subject, body, trailer) is untrusted: it reaches shell only
+# through env variables and Telegram only HTML-escaped by notify.sh.
 name: oklabs-autoresolve-pr
 
 on:
   push:
     branches: ['oklabs/auto-resolve/**']
+  pull_request_target:
+    types: [closed]
 
 permissions:
   contents: read
@@ -25,6 +31,7 @@ defaults:
 jobs:
   pr:
     name: Open the auto-resolve PR
+    if: github.event_name == 'push' && !github.event.deleted
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -43,7 +50,8 @@ jobs:
           {
             echo "upstream=$upstream"
             echo "subject=$(git log -1 --format=%s "$upstream")"
-            echo "conflicted=$(git log -1 --format=%B HEAD | sed -n 's/^Conflicted: //p' | head -1)"
+            # The resolver writes this trailer as the last paragraph; take its last value.
+            echo "conflicted=$(git log -1 --format='%(trailers:key=Conflicted,valueonly)' HEAD | sed '/^$/d' | tail -1 | tr -cd '[:alnum:] ./_+@-')"
           } >> "$GITHUB_OUTPUT"
           url="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state all --json url -q '.[0].url')"
           if [ -n "$url" ]; then
@@ -79,3 +87,24 @@ jobs:
           UPSTREAM_SUBJECT: ${{ steps.pr.outputs.subject }}
           CONFLICTED: ${{ steps.pr.outputs.conflicted }}
         run: bash .oklabs/ci/notify.sh autoresolve-pr
+
+  cleanup:
+    name: Delete the branch of a closed, unmerged auto-resolve PR
+    if: >-
+      github.event_name == 'pull_request_target' && !github.event.pull_request.merged &&
+      startsWith(github.event.pull_request.head.ref, 'oklabs/auto-resolve/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: write
+    steps:
+      # No checkout: nothing from the PR runs here.
+      - name: Delete branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$HEAD_REF" &&
+            echo "deleted $HEAD_REF; the auto-resolver on baldr may try again" >> "$GITHUB_STEP_SUMMARY" ||
+            echo "::warning::could not delete $HEAD_REF (already gone?)"

@@ -102,8 +102,22 @@ preserved. macOS may request permission once when switching from an ad-hoc build
   with the deploy key «baldr voiceink-autoresolve» (write, this repo only). That push starts
   `oklabs-test` (swift test, app compile), and `oklabs-autoresolve-pr.yml` opens the PR to `main`
   with the agent's explanation and sends Telegram. **Nothing merges automatically**: review the
-  resolution and merge with a merge commit. One attempt per upstream commit; a clean merge, an
-  upstream already in `main` or an existing branch is a quiet exit. On failure nothing is pushed
+  resolution and merge with a merge commit. One attempt per upstream commit and **one pending
+  PR at a time**: while any `oklabs/auto-resolve/*` branch exists, runs exit quietly. Merging
+  deletes the branch (`delete_branch_on_merge`); **close the PR without merging to let the next
+  attempt run** (the workflow deletes the closed PR's branch). A clean merge or an upstream
+  already in `main` is a quiet exit too.
+
+  The agent runs in `oklabs-agent`'s bubblewrap sandbox: read-only filesystem, empty `$HOME`
+  (no SSH keys or Infisical identity), only the worktree and its git admin dir writable, user
+  settings only (no `.claude/` settings, hooks or `.mcp.json` from the upstream-controlled
+  worktree), read-only git tools plus `git add`. Every check runs from a private export of the
+  old `main`'s `.oklabs/` with `python -I`, never from the merge worktree, so incoming top-level
+  files cannot shadow modules. The `Conflicted:` trailer is written by the script as the last
+  paragraph and read by the workflow from there; commit text reaches the workflow shell only
+  through env variables. Known limit: on a user-owned repo GitHub attributes deploy-key pushes
+  to the owner, so a ruleset cannot restrict the deploy key to `oklabs/auto-resolve/**`; it can
+  write any ref. It lives only on baldr, outside the agent sandbox. On failure nothing is pushed
   and Telegram gets «VoiceInk auto-resolve не справился» with the log path on baldr
   (`~/.local/state/voiceink-oklabs/runs/<run>.log`). Retry an upstream commit:
   `rm ~/.local/state/voiceink-oklabs/attempted/<sha>` on baldr, then

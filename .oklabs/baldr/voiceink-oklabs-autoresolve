@@ -12,12 +12,18 @@
 # Guards (script-enforced, the agent cannot relax them):
 #   - the final tree differs from `git merge-tree --write-tree main upstream` only in the
 #     conflicted paths; no conflict markers; no unmerged entries; nothing else changed
-#   - trusted checks from origin/main (not from the incoming merge): check-fork-contracts.py
-#     with its manifest, then .oklabs/ci/tests/sync.sh and the fork guard unittests
-#   - one attempt per upstream commit (state marker); the branch must not exist yet
+#   - every check runs from a private export of origin/main's .oklabs/ (cwd there, python -I,
+#     PYTHONSAFEPATH), never from the incoming merge worktree: check-fork-contracts.py with its
+#     manifest (candidate passed by sha, repo by GIT_DIR), .oklabs/ci/tests/sync.sh and the
+#     fork guard unittests
+#   - one pending PR at a time: any oklabs/auto-resolve/* branch on origin = quiet exit
+#     (oklabs-autoresolve-pr.yml deletes it when its PR is closed; merge deletes it too)
+#   - one attempt per upstream commit (state marker)
+#   - the agent runs in oklabs-agent's bubblewrap sandbox (read-only fs, no ~/.ssh or
+#     Infisical identity, no project settings/MCP from the worktree); the push happens here
 #
 # Quiet exits (no message): upstream already in main, clean merge (the GitHub sync handles
-# it), branch already on origin, upstream commit already attempted.
+# it), an auto-resolve branch (pending PR) on origin, upstream commit already attempted.
 # Failure: no push, one Telegram message (bot MAESTRO_BOT_TOKEN from Infisical, chat 79510949).
 #
 # usage: voiceink-oklabs-autoresolve [--dry-run] [--help]
@@ -133,8 +139,14 @@ if [ "$mt" = 0 ]; then
     log "upstream ${U:0:10} merges cleanly into main ${M:0:10}; the GitHub sync handles it"; rm -f "$RUNLOG"; exit 0
 fi
 mapfile -t CONFLICTED < <(printf '%s\n' "$MT_OUT" | tail -n +2 | sed '/^$/d' | sort -u)
-if git -C "$REPO" ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
-    log "$BRANCH already on origin; nothing to do"; rm -f "$RUNLOG"; exit 0
+set +e
+PENDING=$(git -C "$REPO" ls-remote origin "refs/heads/$PREFIX*" 2>>"$RUNLOG")
+rc=$?
+set -e
+if [ "$rc" != 0 ]; then log "ls-remote failed; next run tries again"; exit 0; fi
+if [ -n "$PENDING" ]; then
+    log "pending auto-resolve PR branch on origin ($(printf '%s' "$PENDING" | awk '{sub("refs/heads/","",$2); print $2}' | tr '\n' ' ')); close or merge its PR to let the next attempt run"
+    rm -f "$RUNLOG"; exit 0
 fi
 if [ -e "$STATE/attempted/$U" ] && [ "${VIAR_RETRY:-0}" != 1 ]; then
     log "upstream ${U:0:10} already attempted ($(cat "$STATE/attempted/$U")); rm that file to retry"; rm -f "$RUNLOG"; exit 0
@@ -147,7 +159,7 @@ TRUST=$CACHE/trusted-$RUN
 cleanup() { git -C "$REPO" worktree remove --force "$WT" 2>/dev/null || true; rm -rf "$TRUST" "$WT"; }
 trap cleanup EXIT
 mkdir -p "$TRUST"
-git -C "$REPO" archive "$M" .oklabs/ci | tar -x -C "$TRUST"
+git -C "$REPO" archive "$M" .oklabs | tar -x -C "$TRUST"
 git -C "$REPO" worktree add -q --detach "$WT" "$M"
 cd "$WT"
 git -c merge.conflictstyle=diff3 merge --no-ff --no-commit "$U" >>"$RUNLOG" 2>&1 || true
@@ -237,7 +249,9 @@ rm -f "$CACHE/prompt-$RUN.md" "$CACHE/review-$RUN.md"
 
 # ---- guards ----
 [ -s "$BODY" ] || fail "agent wrote no $BODY"
-body=$(cat "$BODY"); review=$(cat "$REVIEW" 2>/dev/null || echo "Review: no report")
+# Agent text is untrusted: drop anything that looks like our trailer.
+body=$(grep -v '^Conflicted:' "$BODY" || true)
+review=$(grep -v '^Conflicted:' "$REVIEW" 2>/dev/null || echo "Review: no report")
 rm -f "$BODY" "$REVIEW"
 [ -f "$(git rev-parse --git-path MERGE_HEAD)" ] && [ "$(git rev-parse MERGE_HEAD)" = "$U" ] && [ "$(git rev-parse HEAD)" = "$M" ] ||
     fail "the merge state changed (HEAD or MERGE_HEAD moved)"
@@ -258,7 +272,8 @@ MSG=$CACHE/msg-$RUN
     printf 'Merge Beingpax main %s (%s)\n\n' "${U:0:10}" "$SUBJ"
     printf '%s\n\n' "$body"
     printf '%s\n\n' "$review"
-    printf 'Auto-resolved on %s by voiceink-oklabs-autoresolve (Claude Code via oklabs-agent), run %s.\n' "$BUILDER" "$RUN"
+    printf 'Auto-resolved on %s by voiceink-oklabs-autoresolve (Claude Code via oklabs-agent), run %s.\n\n' "$BUILDER" "$RUN"
+    # Last paragraph = the only trailer block; the PR workflow reads its last value.
     printf 'Conflicted: %s\n' "${CONFLICTED[*]}"
 } >"$MSG"
 git commit -q -F "$MSG"
@@ -266,12 +281,17 @@ rm -f "$MSG"
 C=$(git rev-parse HEAD)
 [ "$(git rev-parse HEAD^1)" = "$M" ] && [ "$(git rev-parse HEAD^2)" = "$U" ] || fail "commit is not the expected merge"
 
-log "checks: trusted fork contracts, sync tests, fork guard unittests"
-python3 "$TRUST/.oklabs/ci/check-fork-contracts.py" --base "$M" --candidate "$C" \
+log "checks from the trusted export of main: fork contracts, sync tests, fork guard unittests"
+cd "$TRUST"
+# The candidate is only an argument (sha + GIT_DIR); no code from it runs.
+env -u PYTHONPATH -u PYTHONHOME PYTHONSAFEPATH=1 GIT_DIR="$REPO/.git" \
+    python3 -I .oklabs/ci/check-fork-contracts.py --base "$M" --candidate "$C" \
     --manifest "$TRUST/.oklabs/ci/fork-contracts.json" >>"$RUNLOG" 2>&1 || fail "fork contracts failed"
-# .oklabs/ is protected by the contract check, so the candidate's copy equals the trusted one.
-bash .oklabs/ci/tests/sync.sh >>"$RUNLOG" 2>&1 || fail "sync regression tests failed"
-python3 -m unittest discover -s .oklabs/ci/tests -p 'test_*.py' >>"$RUNLOG" 2>&1 || fail "fork guard unittests failed"
+env -u GIT_DIR -u GIT_WORK_TREE bash .oklabs/ci/tests/sync.sh >>"$RUNLOG" 2>&1 || fail "sync regression tests failed"
+env -u GIT_DIR -u GIT_WORK_TREE -u PYTHONPATH -u PYTHONHOME PYTHONSAFEPATH=1 \
+    python3 -I -m unittest discover -s .oklabs/ci/tests -p 'test_*.py' >>"$RUNLOG" 2>&1 ||
+    fail "fork guard unittests failed"
+cd "$WT"
 
 if [ "$NO_PUSH" = 1 ]; then
     git -C "$REPO" update-ref "refs/autoresolve/$RUN" "$C"
