@@ -23,6 +23,6 @@
     "VoiceInk/Features/Dictionary/Workflows/CustomVocabularyService.swift": ["OKLabsKeytermsFile.terms()"],
     "VoiceInk/Features/Dictionary/Workflows/RecordingVocabulary.swift": ["guard OKLabsSettings.appliesVocabularyCorrection else { return text }"],
     "VoiceInk/Infrastructure/SystemIntegration/Paste/CursorPaster.swift": ["OKLabsSettings.prePasteDelay"],
-    "VoiceInk.xcodeproj/project.pbxproj": ["PRODUCT_BUNDLE_IDENTIFIER = com.prakashjoshipax.VoiceInk;", "ARCHS = \"$(OKLABS_PRODUCT_ARCHS)\";"]
+    "VoiceInk.xcodeproj/project.pbxproj": ["PRODUCT_BUNDLE_IDENTIFIER = com.prakashjoshipax.VoiceInk;", "ARCHS = \"$(OKLABS_PRODUCT_ARCHS)\";", "traits = (\n\t\t\t\tDiarizer,\n\t\t\t);"]
   }
 }
