@@ -17,6 +17,7 @@ let package = Package(
         .library(name: "MeetingCore", targets: ["MeetingCore"]),
         .executable(name: "scribe-bench", targets: ["ScribeBench"]),
         .executable(name: "meeting-probe", targets: ["MeetingProbe"]),
+        .executable(name: "meeting-scribe-bench", targets: ["MeetingScribeBench"]),
     ],
     targets: [
         .target(name: "ScribeCore", path: "VoiceInk/OKLabs/ScribeCore"),
@@ -28,6 +29,8 @@ let package = Package(
         .testTarget(name: "MeetingCaptureTests", dependencies: ["MeetingCapture", "MeetingCore"], path: "Tests/MeetingCaptureTests"),
         .testTarget(name: "MeetingSystemTests", dependencies: ["MeetingSystem", "MeetingCore"], path: "Tests/MeetingSystemTests"),
         .executableTarget(name: "MeetingProbe", dependencies: ["MeetingSystem"], path: ".oklabs/meeting-probe"),
+        .executableTarget(
+            name: "MeetingScribeBench", dependencies: ["MeetingCore", "ScribeCore"], path: ".oklabs/meeting-scribe-bench"),
         .testTarget(name: "MeetingCoreTests", dependencies: ["MeetingCore"], path: "Tests/MeetingCoreTests"),
         .target(
             name: "OKLabsUpdater", path: "VoiceInk",

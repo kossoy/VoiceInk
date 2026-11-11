@@ -58,23 +58,41 @@ public enum MeetingSpeakerResolver {
 /// 5. "Speaker N" for the line's voice cluster;
 /// 6. "Others".
 /// The microphone is always "Me".
+///
+/// The local diarization decides the clusters. The optional cloud pass (`scribe`) only refines it:
+/// it gives a cluster to lines the local pass left without one, and splits a line between two
+/// local clusters by word (`parts(for:)`). A per-line user name keeps the line whole.
 public struct MeetingSpeakerLabeler {
     public let session: MeetingSession
     public let diarization: MeetingDiarization?
+    public let refiner: MeetingScribeRefiner?
     private let cueClusterNames: [String: String]
 
-    public init(session: MeetingSession, diarization: MeetingDiarization?) {
+    public init(session: MeetingSession, diarization: MeetingDiarization?, scribe: MeetingScribeDiarization? = nil) {
         self.session = session
         self.diarization = diarization
+        refiner = diarization.flatMap { local in scribe.map { MeetingScribeRefiner(scribe: $0, local: local) } }
         cueClusterNames = diarization.map {
             MeetingSpeakerNaming.clusterNames(diarization: $0, cues: session.speakerCues)
         } ?? [:]
     }
 
-    /// The voice cluster that dominates a system-audio line, if diarization ran.
+    /// The voice cluster that dominates a system-audio line, if diarization ran: the local
+    /// pass's, else the cloud pass's mapped onto the local clusters.
     public func clusterID(for segment: MeetingTranscriptSegment) -> String? {
         guard segment.source == .system else { return nil }
-        return diarization?.dominantCluster(for: segment.range)
+        return diarization?.dominantCluster(for: segment.range) ?? refiner?.dominantCluster(for: segment.range)
+    }
+
+    /// The line cut into runs of one voice each, or nil when it stays one line.
+    public func parts(for segment: MeetingTranscriptSegment) -> [MeetingLinePart]? {
+        guard segment.source == .system, session.speakerAssignments.segmentNames[segment.id] == nil else { return nil }
+        return refiner?.split(text: segment.text, range: segment.range)
+    }
+
+    /// The label a part of a split line shows: the cluster's user name, cue name or "Speaker N".
+    public func label(for part: MeetingLinePart) -> String {
+        part.clusterID.flatMap { name(ofCluster: $0) } ?? "Others"
     }
 
     /// The name a cluster shows without a per-line override.

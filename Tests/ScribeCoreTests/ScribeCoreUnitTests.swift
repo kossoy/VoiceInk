@@ -319,3 +319,45 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(scribeRMS([]), 0)
     }
 }
+
+final class ScribeDiarizationRequestTests: XCTestCase {
+    func testParseKeepsSpokenWordsWithSpeakers() throws {
+        let json = #"""
+            {"text":"hi there","words":[
+             {"text":"hi","type":"word","start":0.1,"end":0.3,"speaker_id":"speaker_0"},
+             {"text":" ","type":"spacing","start":0.3,"end":0.4,"speaker_id":"speaker_0"},
+             {"text":"(laughs)","type":"audio_event","start":0.4,"end":0.9,"speaker_id":"speaker_1"},
+             {"text":"there","type":"word","start":1.0,"end":1.2,"speaker_id":"speaker_1"},
+             {"text":"orphan","type":"word","start":1.3,"end":1.4},
+             {"text":"backwards","type":"word","start":2.0,"end":1.0,"speaker_id":"speaker_1"}]}
+            """#
+        let words = try ScribeDiarizationRequest.parse(Data(json.utf8))
+        XCTAssertEqual(words.map(\.text), ["hi", "there"])
+        XCTAssertEqual(words.map(\.speakerID), ["speaker_0", "speaker_1"])
+        XCTAssertEqual(words.first?.start, 0.1)
+        XCTAssertThrowsError(try ScribeDiarizationRequest.parse(Data(#"{"text":"x"}"#.utf8)))
+    }
+
+    func testBodyCarriesDiarizationFieldsAndTheWholeFile() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let audio = dir.appendingPathComponent("a.wav")
+        let payload = Data((0..<3_000_000).map { UInt8($0 % 251) })
+        try payload.write(to: audio)
+        let body = dir.appendingPathComponent("body")
+        let request = ScribeDiarizationRequest(apiKey: "k")
+        let type = try request.writeBody(audio: audio, to: body, boundary: "B")
+        XCTAssertEqual(type, "multipart/form-data; boundary=B")
+        let data = try Data(contentsOf: body)
+        let head = String(decoding: data.prefix(800), as: UTF8.self)
+        for field in ["name=\"model_id\"\r\n\r\nscribe_v3", "name=\"diarize\"\r\n\r\ntrue",
+            "name=\"timestamps_granularity\"\r\n\r\nword", "filename=\"system.wav\""]
+        {
+            XCTAssertTrue(head.contains(field), field)
+        }
+        XCTAssertFalse(head.contains("keyterms"))
+        XCTAssertNotNil(data.range(of: payload))
+        XCTAssertTrue(String(decoding: data.suffix(10), as: UTF8.self).hasSuffix("--B--\r\n"))
+    }
+}
